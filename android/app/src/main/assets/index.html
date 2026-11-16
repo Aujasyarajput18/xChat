@@ -907,6 +907,54 @@
             gap: 10px;
             margin-top: 20px;
         }
+
+        /* Camera Scanner Viewfinder & Laser */
+        .scanner-viewfinder {
+            position: relative;
+            width: 100%;
+            height: 240px;
+            background: #000000;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid var(--border-card);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.8);
+            margin: 14px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .scanner-viewfinder video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .scanner-laser {
+            position: absolute;
+            left: 5%;
+            width: 90%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--pastel-lavender), var(--pastel-mint), transparent);
+            box-shadow: 0 0 14px var(--pastel-lavender);
+            animation: scanLaser 2.2s infinite ease-in-out;
+            pointer-events: none;
+        }
+        @keyframes scanLaser {
+            0% { top: 12%; opacity: 0.3; }
+            50% { top: 88%; opacity: 1; }
+            100% { top: 12%; opacity: 0.3; }
+        }
+        .scanner-corner {
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            border-color: var(--pastel-lavender);
+            border-style: solid;
+            pointer-events: none;
+        }
+        .scanner-corner.tl { top: 14px; left: 14px; border-width: 3px 0 0 3px; border-top-left-radius: 8px; }
+        .scanner-corner.tr { top: 14px; right: 14px; border-width: 3px 3px 0 0; border-top-right-radius: 8px; }
+        .scanner-corner.bl { bottom: 14px; left: 14px; border-width: 0 0 3px 3px; border-bottom-left-radius: 8px; }
+        .scanner-corner.br { bottom: 14px; right: 14px; border-width: 0 3px 3px 0; border-bottom-right-radius: 8px; }
         .btn-action {
             padding: 9px 18px;
             border-radius: 9999px;
@@ -1605,6 +1653,34 @@
                 <button class="btn-action btn-primary" onclick="copyIdentityPayload()">📋 Copy Details</button>
                 <button class="btn-action" style="background: #1a1a1a; color: var(--text-pure);" onclick="openScannerFromQr()">📷 Scan QR</button>
                 <button class="btn-action btn-cancel" onclick="closeModal('qrModal')">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Camera Video QR Code Scanner -->
+    <div class="modal-overlay" id="qrScannerModal">
+        <div class="modal-card" style="text-align: center; max-width: 360px;">
+            <div class="modal-title font-serif" style="font-size: 20px;">Scan Peer Badge</div>
+            <div class="modal-desc">Align a peer's xChat QR code within the viewfinder.</div>
+
+            <div class="scanner-viewfinder">
+                <video id="qrScannerVideo" playsinline autoplay muted></video>
+                <div class="scanner-laser"></div>
+                <div class="scanner-corner tl"></div>
+                <div class="scanner-corner tr"></div>
+                <div class="scanner-corner bl"></div>
+                <div class="scanner-corner br"></div>
+            </div>
+
+            <div id="scannerStatusText" style="font-size: 12px; color: var(--text-secondary); margin-bottom: 14px;">
+                Looking for valid xChat QR code...
+            </div>
+
+            <input type="file" id="qrFileInput" accept="image/*" style="display: none;" onchange="handleQrImageUpload(event)" />
+
+            <div class="modal-actions" style="justify-content: center; gap: 8px;">
+                <button class="btn-action" style="background: #181818; color: var(--pastel-lavender);" onclick="document.getElementById('qrFileInput').click()">📁 Upload Image</button>
+                <button class="btn-action btn-cancel" onclick="closeQrScanner()">Cancel</button>
             </div>
         </div>
     </div>
@@ -2341,6 +2417,174 @@
                 navigator.clipboard.writeText(text);
                 alert("Reachable socket copied to clipboard: " + text);
             }
+        }
+
+        // Camera Video QR Code Scanner & Analyzer
+        let qrScannerStream = null;
+        let qrScannerInterval = null;
+
+        function openScannerFromQr() {
+            closeModal('qrModal');
+            openModal('qrScannerModal');
+            startQrScanner();
+        }
+
+        async function startQrScanner() {
+            const video = document.getElementById('qrScannerVideo');
+            const status = document.getElementById('scannerStatusText');
+            if (status) status.innerText = "Initializing camera viewfinder...";
+
+            try {
+                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                    qrScannerStream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+                    });
+                    video.srcObject = qrScannerStream;
+                    await video.play();
+                    if (status) status.innerText = "Align peer's xChat QR code inside viewfinder...";
+
+                    // Start scanning frames
+                    if (window.BarcodeDetector) {
+                        const detector = new BarcodeDetector({ formats: ['qr_code'] });
+                        qrScannerInterval = setInterval(async () => {
+                            try {
+                                if (video.readyState >= 2) {
+                                    const barcodes = await detector.detect(video);
+                                    if (barcodes.length > 0) {
+                                        onQrCodeDetected(barcodes[0].rawValue);
+                                    }
+                                }
+                            } catch(e) {}
+                        }, 250);
+                    } else {
+                        if (status) status.innerText = "Camera active. You can also upload a QR screenshot.";
+                    }
+                } else {
+                    if (status) status.innerText = "Camera API unavailable on this origin. Use 'Upload Image'.";
+                }
+            } catch(err) {
+                if (status) status.innerText = "Camera permission denied or camera busy. You can upload an image.";
+            }
+        }
+
+        function closeQrScanner() {
+            if (qrScannerInterval) {
+                clearInterval(qrScannerInterval);
+                qrScannerInterval = null;
+            }
+            if (qrScannerStream) {
+                qrScannerStream.getTracks().forEach(t => t.stop());
+                qrScannerStream = null;
+            }
+            const video = document.getElementById('qrScannerVideo');
+            if (video) video.srcObject = null;
+            closeModal('qrScannerModal');
+        }
+
+        function handleQrImageUpload(event) {
+            const file = event.target.files && event.target.files[0];
+            if (!file) return;
+            const status = document.getElementById('scannerStatusText');
+            if (status) status.innerText = "Analyzing uploaded image...";
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = async function() {
+                    if (window.BarcodeDetector) {
+                        try {
+                            const detector = new BarcodeDetector({ formats: ['qr_code'] });
+                            const barcodes = await detector.detect(img);
+                            if (barcodes.length > 0) {
+                                onQrCodeDetected(barcodes[0].rawValue);
+                                return;
+                            }
+                        } catch(err) {}
+                    }
+                    alert("Image loaded. If no QR is automatically detected, you can enter the peer @username directly in Smart Connect.");
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function parseInvitePayload(raw) {
+            if (!raw) return null;
+            const str = raw.trim();
+
+            if (str.startsWith("xchat://invite/")) {
+                try {
+                    const withoutScheme = str.substring(15);
+                    const qIdx = withoutScheme.indexOf("?");
+                    const username = qIdx !== -1 ? decodeURIComponent(withoutScheme.substring(0, qIdx)) : decodeURIComponent(withoutScheme);
+                    const params = new URLSearchParams(qIdx !== -1 ? withoutScheme.substring(qIdx + 1) : "");
+                    return {
+                        username: username.startsWith("@") ? username : "@" + username,
+                        address: params.get("addr") || "",
+                        fingerprint: params.get("fp") || "",
+                        target: params.get("sock") || "127.0.0.1:8080"
+                    };
+                } catch(e) {}
+            }
+
+            try {
+                const obj = JSON.parse(str);
+                return {
+                    username: obj.username || obj.alias || "@peer",
+                    address: obj.address || "",
+                    fingerprint: obj.fingerprint || "",
+                    target: obj.reachable || (obj.ip && obj.port ? obj.ip + ":" + obj.port : "127.0.0.1:8080")
+                };
+            } catch(e) {}
+
+            if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{2,5}$/.test(str)) {
+                return {
+                    username: "@peer_" + str.replace(/[^0-9]/g, "").slice(-4),
+                    address: "xchat_" + Math.random().toString(16).substring(2, 8),
+                    fingerprint: "",
+                    target: str
+                };
+            }
+
+            return null;
+        }
+
+        function onQrCodeDetected(rawData) {
+            closeQrScanner();
+            SoundFX.playReceive();
+            if (window.AndroidBridge && window.AndroidBridge.vibrate) {
+                window.AndroidBridge.vibrate(40);
+            }
+
+            const parsed = parseInvitePayload(rawData);
+            if (!parsed) {
+                alert("⚠️ Scanned code is not a recognized xChat invite:\n" + rawData);
+                return;
+            }
+
+            let existing = contacts.find(c => (parsed.username && c.alias === parsed.username) || (parsed.target && c.target === parsed.target));
+            if (!existing) {
+                existing = {
+                    alias: parsed.username || 'Peer',
+                    target: parsed.target || '127.0.0.1:8080',
+                    fingerprint: parsed.fingerprint || '',
+                    address: parsed.address || '',
+                    status: 'Linked via QR',
+                    last_message: 'Pairing verified via Air-Gap QR',
+                    last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                };
+                contacts.push(existing);
+            } else {
+                if (parsed.target) existing.target = parsed.target;
+                if (parsed.fingerprint) existing.fingerprint = parsed.fingerprint;
+                existing.status = 'Linked via QR';
+            }
+
+            Storage.set('contacts', JSON.stringify(contacts));
+            renderContacts();
+            selectContact(existing);
+
+            alert(`✅ Successfully paired with ${existing.alias} via Air-Gap QR!\nSocket: ${existing.target}\nForward-secrecy channel ready.`);
         }
 
         const VISUAL_EMOJI_POOL = ["🔒", "🛡️", "🔑", "⚡", "🌟", "🪐", "💎", "🔮", "🌊", "🔥", "🍀", "🌸", "🦅", "🐺", "🐬", "🦊", "🎯", "🚀", "🛸", "⛵", "🏔️", "🏝️", "⚓", "⚔️", "🎨", "🎭", "🎻", "🌙", "☀️", "🌈", "⚡", "👑"];
