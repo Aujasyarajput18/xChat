@@ -3,6 +3,7 @@
 //! and multi-transport failover/routing manager.
 
 pub mod audio_modem;
+pub mod discovery;
 pub mod errors;
 pub mod manager;
 pub mod mesh_sim;
@@ -12,6 +13,7 @@ pub mod tcp;
 pub mod traits;
 
 pub use audio_modem::AudioCallModem;
+pub use discovery::{DiscoveryBeacon, PeerDiscoveryEngine, DEFAULT_DISCOVERY_PORT};
 pub use errors::TransportError;
 pub use mixnet_transport::MixnetTransport;
 pub use sms::SmsCarrier;
