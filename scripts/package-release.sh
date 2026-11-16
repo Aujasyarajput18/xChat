@@ -50,7 +50,14 @@ tar -czvf "${DIST_DIR}/xchat-v${VERSION}-macos-x86_64.tar.gz" -C "${DIST_DIR}/pk
 (cd "${DIST_DIR}" && shasum -a 256 "xchat-v${VERSION}-macos-x86_64.tar.gz" > "xchat-v${VERSION}-macos-x86_64.sha256")
 rm -rf "${DIST_DIR}/pkg-x86_64"
 
+# Package Android Standalone APK
+if [[ -f "${SCRIPT_DIR}/build-apk.sh" ]]; then
+    echo "[*] Building Standalone Android Release APK..."
+    bash "${SCRIPT_DIR}/build-apk.sh"
+fi
+
 echo "=========================================================="
 echo "Release packages created in ${DIST_DIR}:"
 ls -lh "${DIST_DIR}"/*.tar.gz
+ls -lh "${DIST_DIR}"/*.apk
 echo "=========================================================="
