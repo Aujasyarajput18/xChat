@@ -9,7 +9,10 @@ import time
 import statistics
 import os
 import json
+from pathlib import Path
 
+BASE_DIR = Path(__file__).resolve().parent
+DBMS_DIR = BASE_DIR.parent
 DB_FILE = "/tmp/xchat_timing_eval.db"
 
 def init_db(apply_tuning=False):
@@ -20,7 +23,8 @@ def init_db(apply_tuning=False):
     cur = conn.cursor()
     
     # 1. Base Schema
-    with open("xChat_AP_2026/dbms/03_schema.sql") as f:
+    schema_path = DBMS_DIR / "03_schema.sql"
+    with open(schema_path) as f:
         cur.executescript(f.read())
         
     # 2. Scaled Data: 50 contacts, 50 threads, 2500 messages, 300 outbox items
@@ -127,7 +131,8 @@ def init_db(apply_tuning=False):
     conn.commit()
 
     if apply_tuning:
-        with open("xChat_AP_2026/dbms/plans/02_index_tuning.sql") as f:
+        tuning_path = BASE_DIR / "02_index_tuning.sql"
+        with open(tuning_path) as f:
             cur.executescript(f.read())
         conn.commit()
         
@@ -284,9 +289,10 @@ def main():
         })
     print("="*80)
 
-    with open("xChat_AP_2026/dbms/plans/benchmark_summary.json", "w") as f:
+    summary_path = BASE_DIR / "benchmark_summary.json"
+    with open(summary_path, "w") as f:
         json.dump(output_data, f, indent=2)
-    print("[+] Saved raw metrics to xChat_AP_2026/dbms/plans/benchmark_summary.json")
+    print(f"[+] Saved raw metrics to {summary_path}")
 
 if __name__ == "__main__":
     main()
