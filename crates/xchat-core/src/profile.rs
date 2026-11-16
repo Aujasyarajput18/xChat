@@ -1,3 +1,9 @@
+use std::{
+    fs::{self, File},
+    io::{Read, Write},
+    path::Path,
+};
+
 use serde::{Deserialize, Serialize};
 
 use crate::errors::CoreError;
@@ -113,6 +119,28 @@ impl UserProfile {
 
         Ok((username, address, fingerprint, socket))
     }
+
+    /// Persist user profile to local disk.
+    pub fn save_to_disk(&self, path: &Path) -> Result<(), CoreError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| CoreError::StorageError(e.to_string()))?;
+        }
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| CoreError::Serialization(e.to_string()))?;
+        let mut file = File::create(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
+        file.write_all(json.as_bytes())
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Load user profile from local disk.
+    pub fn load_from_disk(path: &Path) -> Result<Self, CoreError> {
+        let mut file = File::open(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        serde_json::from_str(&contents).map_err(|e| CoreError::Serialization(e.to_string()))
+    }
 }
 
 /// Represents a peer discovered over zero-configuration local wireless beacon or mesh announcement.
@@ -156,5 +184,17 @@ mod tests {
         assert_eq!(a, "xchat_12345");
         assert_eq!(fp, "fp_98765");
         assert_eq!(sock, "192.168.1.100:8080");
+    }
+
+    #[test]
+    fn test_user_profile_disk_persistence() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("profile.json");
+
+        let profile = UserProfile::new("operator", "Mesh Operator", "xchat_abc123", "fp_xyz789", 12345).unwrap();
+        profile.save_to_disk(&path).unwrap();
+
+        let loaded = UserProfile::load_from_disk(&path).unwrap();
+        assert_eq!(profile, loaded);
     }
 }
