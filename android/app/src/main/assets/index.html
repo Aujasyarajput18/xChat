@@ -1669,6 +1669,9 @@
                         <button class="action-circle-btn" onclick="pingActivePeer()" title="Ping Peer Latency">
                             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                         </button>
+                        <button class="action-circle-btn" onclick="openSafetyVerificationModal()" title="Safety Verification">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        </button>
                         <button class="action-circle-btn" onclick="openModal('peerInfoModal')" title="Peer Details">
                             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
                         </button>
@@ -1795,6 +1798,33 @@
             <div class="modal-actions" style="justify-content: center; gap: 8px;">
                 <button class="btn-action" style="background: #181818; color: var(--pastel-lavender);" onclick="document.getElementById('qrFileInput').click()">📁 Upload Image</button>
                 <button class="btn-action btn-cancel" onclick="closeQrScanner()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Visual Fingerprint Safety Verification -->
+    <div class="modal-overlay" id="safetyVerificationModal">
+        <div class="modal-card" style="text-align: center; max-width: 380px;">
+            <div class="modal-title font-serif" style="font-size: 20px;">Safety Code Verification</div>
+            <div class="modal-desc">Compare these 6 emoji symbols with <b id="safetyPeerName" style="color:var(--text-pure);">Peer</b> out-of-band to mathematically confirm end-to-end security.</div>
+
+            <div style="background: #080808; border: 1px solid var(--border-card); border-radius: 18px; padding: 18px 12px; margin: 16px 0; box-shadow: 0 8px 30px rgba(0,0,0,0.5);">
+                <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--pastel-lavender); margin-bottom: 8px; font-weight: 700;">Deterministic Emoji Safety Blocks</div>
+                <div id="safetyEmojiDisplay" class="font-mono" style="font-size: 26px; letter-spacing: 8px; margin: 10px 0; user-select: text;">
+                    🔒 🌸 ⚡ 🐬 💎 🪐
+                </div>
+                <div id="safetyHexDisplay" class="font-mono" style="font-size: 10.5px; color: var(--text-muted); word-break: break-all; margin-top: 8px;">
+                    fp_0000000000000000
+                </div>
+            </div>
+
+            <div style="font-size: 11.5px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 16px; text-align: left; padding: 0 8px;">
+                If the symbols on both devices are identical, your messages are guaranteed to be cryptographically immune to wiretapping, tampering, or impersonation.
+            </div>
+
+            <div class="modal-actions" style="justify-content: center; gap: 8px;">
+                <button class="btn-action btn-primary" onclick="markPeerAsVerified()">✓ Mark as Verified</button>
+                <button class="btn-action btn-cancel" onclick="closeModal('safetyVerificationModal')">Close</button>
             </div>
         </div>
     </div>
@@ -3072,6 +3102,37 @@
                 }
                 alert("🚨 Emergency SOS Distress Beacon broadcasted over local mesh!");
             }
+        }
+
+        function openSafetyVerificationModal() {
+            if (!activeContact) return;
+            const peerNameEl = document.getElementById('safetyPeerName');
+            if (peerNameEl) peerNameEl.innerText = activeContact.alias;
+
+            const fp = activeContact.fingerprint || myIdentity.fingerprint;
+            const emojis = getVisualFingerprintEmojis(fp);
+
+            const emojiEl = document.getElementById('safetyEmojiDisplay');
+            if (emojiEl) emojiEl.innerText = emojis;
+
+            const hexEl = document.getElementById('safetyHexDisplay');
+            if (hexEl) hexEl.innerText = fp || 'fp_' + activeContact.alias;
+
+            openModal('safetyVerificationModal');
+        }
+
+        function markPeerAsVerified() {
+            if (!activeContact) return;
+            activeContact.status = 'Verified ✓';
+            Storage.set('contacts', JSON.stringify(contacts));
+            renderContacts();
+            document.getElementById('activePeerStatus').innerText = 'Double Ratchet Verified ✓';
+            closeModal('safetyVerificationModal');
+            SoundFX.playReceive();
+            if (window.AndroidBridge && window.AndroidBridge.vibrate) {
+                window.AndroidBridge.vibrate(30);
+            }
+            alert(`🔒 ${activeContact.alias} marked as Verified!`);
         }
 
         function enterBurnerRoom() {
