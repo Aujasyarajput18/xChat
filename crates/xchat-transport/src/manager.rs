@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, Mutex};
-use xchat_core::envelope::EncryptedEnvelope;
+use xchat_core::{envelope::EncryptedEnvelope, profile::DiscoveredPeer};
 
 use crate::{
+    discovery::PeerDiscoveryEngine,
     errors::TransportError,
     traits::{Transport, TransportType},
 };
@@ -14,6 +15,7 @@ pub struct TransportManager {
     transports: Mutex<Vec<Arc<dyn Transport>>>,
     merged_inbound_rx: Mutex<mpsc::Receiver<EncryptedEnvelope>>,
     merged_inbound_tx: mpsc::Sender<EncryptedEnvelope>,
+    discovery: Mutex<Option<Arc<PeerDiscoveryEngine>>>,
 }
 
 impl TransportManager {
@@ -23,7 +25,30 @@ impl TransportManager {
             transports: Mutex::new(Vec::new()),
             merged_inbound_rx: Mutex::new(rx),
             merged_inbound_tx: tx,
+            discovery: Mutex::new(None),
         }
+    }
+
+    /// Attach a peer discovery engine to manage local mesh peer advertisements.
+    pub async fn set_discovery_engine(&self, engine: Arc<PeerDiscoveryEngine>) {
+        let mut d = self.discovery.lock().await;
+        *d = Some(engine);
+    }
+
+    /// Retrieve active peers discovered across local wireless networks.
+    pub async fn discovered_peers(&self) -> Vec<DiscoveredPeer> {
+        let d = self.discovery.lock().await;
+        if let Some(engine) = d.as_ref() {
+            engine.get_active_peers()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Resolve a `@username` to a discovered local peer.
+    pub async fn resolve_username(&self, username: &str) -> Option<DiscoveredPeer> {
+        let d = self.discovery.lock().await;
+        d.as_ref().and_then(|e| e.resolve_username(username))
     }
 
     /// Register a new physical or logical transport (e.g. TCP LAN, Bluetooth LE).
