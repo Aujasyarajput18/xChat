@@ -1543,7 +1543,7 @@
                 <div class="search-wrap">
                     <div class="search-pill-box">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                        <input type="text" class="search-input-field" id="searchFilter" placeholder="Search contacts or sockets..." oninput="filterContacts()">
+                        <input type="text" class="search-input-field" id="searchFilter" placeholder="Search @username, chats or sockets..." oninput="filterContacts()">
                     </div>
                 </div>
 
@@ -2537,7 +2537,24 @@
                 renderContacts();
                 return;
             }
-            const filtered = contacts.filter(c => c.alias.toLowerCase().includes(q) || (c.target && c.target.toLowerCase().includes(q)));
+            const cleanQ = q.startsWith('@') ? q.slice(1) : q;
+            const filtered = contacts.filter(c => {
+                const aliasMatch = c.alias.toLowerCase().includes(q) || (cleanQ && c.alias.toLowerCase().includes(cleanQ));
+                const targetMatch = c.target && c.target.toLowerCase().includes(q);
+                const history = chatHistories[c.alias] || [];
+                const msgMatch = history.some(m => m.text && m.text.toLowerCase().includes(q));
+                return aliasMatch || targetMatch || msgMatch;
+            }).map(c => {
+                const history = chatHistories[c.alias] || [];
+                const matchedMsg = [...history].reverse().find(m => m.text && m.text.toLowerCase().includes(q));
+                if (matchedMsg && !c.alias.toLowerCase().includes(q) && !(cleanQ && c.alias.toLowerCase().includes(cleanQ))) {
+                    return {
+                        ...c,
+                        last_message: `💬 ${matchedMsg.text}`
+                    };
+                }
+                return c;
+            });
             renderContacts(filtered);
         }
 
