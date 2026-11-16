@@ -71,3 +71,19 @@ Build, test, verify, and document a production-grade, full-fledged implementatio
 - [x] Embedded Lightweight App GUI (`crates/xchat-cli/src/gui.rs`) with embedded HTML/CSS/JS frontend
 - [x] CLI integration: `xchat app`, `xchat gui`, `xchat sos`, `xchat burner`
 - [x] Verification, testing (all 30 tests passed), and release build repackaging
+
+### Phase 9: High-End UX/UI Redesign & Collaborator Commit Integration
+- [x] Pull and cleanly integrate 26 collaborator commits from `origin/main`
+- [x] Harmonize CashPilot Obsidian Noir aesthetic with Sage Mint and Pastel Lavender
+- [x] Implement real-time contact & message full-text search with `@username` support
+- [x] Enhance squircle micro-interactions, cubic-bezier hover transitions, and active glows
+- [x] Add customizable user profiles with avatar color swatches and bio persistence
+
+### Phase 10: Serverless Username (`@handle`) Architecture & Zero-Config Mesh Radar
+- [x] Implement `UserProfile` model and `@username` validation in `xchat-core`
+- [x] Add zero-config UDP discovery engine (`PeerDiscoveryEngine`) on port 9444 in `xchat-transport`
+- [x] Implement Nearby Mesh Radar horizontal carousel for 1-tap peer connection
+- [x] Luxury Designer QR code matrix with pastel gradient, central glowing shield emblem, and camera scanner
+- [x] Visual Safety Verification using 6-symbol emoji fingerprint blocks
+- [x] Multi-node automated verification test suite (`scripts/test-username-discovery.sh`)
+- [x] Release packaging automation and GitHub release asset upload (v0.1.0)
