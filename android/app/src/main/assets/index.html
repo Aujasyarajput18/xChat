@@ -1801,6 +1801,64 @@
             drawFinderEye(0, 0, "#d4c4fb");
             drawFinderEye(moduleCount - 7, 0, "#c5d8ff");
             drawFinderEye(0, moduleCount - 7, "#d2e8b8");
+
+            // Central Glowing xChat Shield Emblem
+            var badgeModuleW = Math.max(5 * cellSize, 40);
+            var badgeX = margin + (moduleCount * cellSize - badgeModuleW) / 2;
+            var badgeY = badgeX;
+
+            // Subtle outer glow
+            ctx.save();
+            ctx.shadowColor = "rgba(212, 196, 251, 0.35)";
+            ctx.shadowBlur = 12;
+            ctx.fillStyle = "#0a0a0a";
+            ctx.beginPath();
+            if (ctx.roundRect) {
+                ctx.roundRect(badgeX, badgeY, badgeModuleW, badgeModuleW, 10);
+            } else {
+                ctx.rect(badgeX, badgeY, badgeModuleW, badgeModuleW);
+            }
+            ctx.fill();
+            ctx.restore();
+
+            // Inner dark card & squircle border
+            ctx.fillStyle = "#0c0c0c";
+            ctx.strokeStyle = "rgba(212, 196, 251, 0.4)";
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            if (ctx.roundRect) {
+                ctx.roundRect(badgeX, badgeY, badgeModuleW, badgeModuleW, 10);
+            } else {
+                ctx.rect(badgeX, badgeY, badgeModuleW, badgeModuleW);
+            }
+            ctx.fill();
+            ctx.stroke();
+
+            // Stylized vector shield emblem
+            ctx.save();
+            ctx.translate(badgeX + badgeModuleW / 2, badgeY + badgeModuleW / 2);
+            var scale = badgeModuleW / 36;
+            ctx.scale(scale, scale);
+
+            // Metallic lavender shield
+            ctx.fillStyle = "#d4c4fb";
+            ctx.beginPath();
+            ctx.moveTo(0, -9);
+            ctx.lineTo(8, -5);
+            ctx.lineTo(8, 2);
+            ctx.quadraticCurveTo(8, 8, 0, 11);
+            ctx.quadraticCurveTo(-8, 8, -8, 2);
+            ctx.lineTo(-8, -5);
+            ctx.closePath();
+            ctx.fill();
+
+            // Distinctive obsidian cut 'x'
+            ctx.fillStyle = "#0c0c0c";
+            ctx.font = "bold 9px 'Plus Jakarta Sans', sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText("x", 0, 1.5);
+            ctx.restore();
         }
 
         // Web Audio Synthesized Sound Effects (100% offline, Zero external assets)
