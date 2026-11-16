@@ -185,13 +185,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_discovery_beacon_serialization() {
-        let beacon = DiscoveryBeacon::new(
-            "@alice",
-            "Alice Smith",
-            "xchat_abcdef",
-            "fp_12345678",
-            8080,
-        );
+        let beacon =
+            DiscoveryBeacon::new("@alice", "Alice Smith", "xchat_abcdef", "fp_12345678", 8080);
         let bytes = beacon.to_bytes().unwrap();
         let decoded = DiscoveryBeacon::from_bytes(&bytes).unwrap();
         assert_eq!(beacon, decoded);

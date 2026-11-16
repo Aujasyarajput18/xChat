@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -9,7 +10,8 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use xchat_core::keystore::KeyStore;
+use xchat_core::{keystore::KeyStore, profile::UserProfile};
+use xchat_transport::discovery::{DiscoveryBeacon, PeerDiscoveryEngine, DEFAULT_DISCOVERY_PORT};
 
 pub const EMBEDDED_HTML: &str = include_str!("../../../android/app/src/main/assets/index.html");
 
@@ -35,10 +37,12 @@ pub struct ChatMessage {
 #[allow(dead_code)]
 pub struct AppState {
     pub keystore: KeyStore,
+    pub profile: UserProfile,
     pub local_ip: String,
     pub local_port: u16,
     pub contacts: Vec<ContactEntry>,
     pub messages: HashMap<String, Vec<ChatMessage>>,
+    pub discovery: Arc<PeerDiscoveryEngine>,
 }
 
 fn detect_local_ip() -> String {
@@ -60,6 +64,14 @@ fn get_now_time_string() -> String {
     let hours = (now / 3600) % 24;
     let minutes = (now / 60) % 60;
     format!("{:02}:{:02}", hours, minutes)
+}
+
+fn get_profile_path() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".xchat_profile.json")
+    } else {
+        PathBuf::from(".xchat_profile.json")
+    }
 }
 
 async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Result<String> {
@@ -92,7 +104,7 @@ async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Res
     }
 }
 
-/// Start the embedded Telegram-styled app server and open default browser.
+/// Start the embedded Telegram-styled app server with UDP peer discovery.
 pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
     let bind_addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&bind_addr).await?;
@@ -102,27 +114,74 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
     let my_pub = keystore.identity.public_key();
     let my_address = my_pub.address();
     let my_fingerprint = my_pub.fingerprint();
+    let visual_fp = my_pub.visual_fingerprint();
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let profile_path = get_profile_path();
+    let profile = UserProfile::load_from_disk(&profile_path).unwrap_or_else(|_| {
+        let initial_handle = format!("user_{}", &my_address[6..12]);
+        UserProfile::new(
+            &initial_handle,
+            "Mesh Operator",
+            &my_address,
+            &my_fingerprint,
+            now,
+        )
+        .unwrap()
+    });
+
+    let discovery_engine =
+        match PeerDiscoveryEngine::bind(DEFAULT_DISCOVERY_PORT, DEFAULT_DISCOVERY_PORT).await {
+            Ok(e) => e,
+            Err(_) => PeerDiscoveryEngine::bind(0, DEFAULT_DISCOVERY_PORT).await?,
+        };
 
     let state = Arc::new(Mutex::new(AppState {
         keystore,
+        profile: profile.clone(),
         local_ip: local_ip.clone(),
         local_port: port,
         contacts: Vec::new(),
         messages: HashMap::new(),
+        discovery: discovery_engine.clone(),
     }));
+
+    // Spawn background task: periodic local UDP beacon broadcast every 4s
+    let beacon_engine = discovery_engine.clone();
+    let beacon_username = profile.username.clone();
+    let beacon_display_name = profile.display_name.clone();
+    let beacon_addr = my_address.clone();
+    let beacon_fp = my_fingerprint.clone();
+    tokio::spawn(async move {
+        loop {
+            let beacon = DiscoveryBeacon::new(
+                &beacon_username,
+                &beacon_display_name,
+                &beacon_addr,
+                &beacon_fp,
+                port,
+            );
+            let _ = beacon_engine.broadcast_beacon(&beacon).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(4)).await;
+        }
+    });
 
     println!("===============================================================================");
     println!("   xChat Telegram-Styled App GUI Server Active");
     println!("===============================================================================");
     println!("Web App URL:       http://localhost:{}", port);
     println!("Reachable LAN IP:  {}:{}", local_ip, port);
+    println!("Username Handle:   {}", profile.username);
     println!("Local Address:     {}", my_address);
-    println!("Fingerprint:       {}", my_fingerprint);
-    println!("Transport Status:  Peer-to-Peer Wi-Fi / Hotspot Mesh & Mixnet");
+    println!("Visual Safety Code:{}", visual_fp);
+    println!("Discovery Carrier: Local UDP Beacon (Zero-Config Nearby Radar Active)");
     println!("-------------------------------------------------------------------------------");
     println!("Opening local browser window...");
 
-    // Try to open the default system browser automatically
     #[cfg(target_os = "macos")]
     let _ = std::process::Command::new("open")
         .arg(format!("http://localhost:{}", port))
@@ -144,6 +203,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
         let state_clone = state.clone();
         let my_addr_clone = my_address.clone();
         let my_fp_clone = my_fingerprint.clone();
+        let visual_fp_clone = visual_fp.clone();
         let local_ip_clone = local_ip.clone();
 
         tokio::spawn(async move {
@@ -212,15 +272,118 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
             }
 
             if path == "/api/identity" {
+                let (username, display_name) = {
+                    let st = state_clone.lock().unwrap();
+                    (st.profile.username.clone(), st.profile.display_name.clone())
+                };
                 let json = format!(
-                    r#"{{"address":"{}","fingerprint":"{}","ip":"{}","port":{},"status":"online"}}"#,
-                    my_addr_clone, my_fp_clone, local_ip_clone, port
+                    r#"{{"address":"{}","fingerprint":"{}","visual_fingerprint":"{}","username":"{}","display_name":"{}","ip":"{}","port":{},"status":"online"}}"#,
+                    my_addr_clone,
+                    my_fp_clone,
+                    visual_fp_clone,
+                    username,
+                    display_name,
+                    local_ip_clone,
+                    port
                 );
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     cors_headers,
                     json.len(),
                     json
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/api/profile" && method == "GET" {
+                let (profile, reachable, invite_url) = {
+                    let st = state_clone.lock().unwrap();
+                    let sock = format!("{}:{}", st.local_ip, st.local_port);
+                    let invite = st.profile.generate_invite_url(&sock);
+                    (st.profile.clone(), sock, invite)
+                };
+                let json = format!(
+                    r#"{{"username":"{}","display_name":"{}","bio":"{}","avatar_color":"{}","address":"{}","fingerprint":"{}","visual_fingerprint":"{}","reachable":"{}","invite_url":"{}"}}"#,
+                    profile.username,
+                    profile.display_name,
+                    profile.bio,
+                    profile.avatar_color,
+                    profile.address,
+                    profile.fingerprint,
+                    visual_fp_clone,
+                    reachable,
+                    invite_url
+                );
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    cors_headers,
+                    json.len(),
+                    json
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/api/profile" && method == "POST" {
+                #[derive(Deserialize)]
+                struct UpdateProfileReq {
+                    username: Option<String>,
+                    display_name: Option<String>,
+                    bio: Option<String>,
+                    avatar_color: Option<String>,
+                }
+                if let Ok(req) = serde_json::from_str::<UpdateProfileReq>(&body) {
+                    let mut st = state_clone.lock().unwrap();
+                    if let Some(u) = req.username {
+                        if let Ok(clean) = UserProfile::validate_and_normalize_username(&u) {
+                            st.profile.username = clean;
+                        }
+                    }
+                    if let Some(dn) = req.display_name {
+                        st.profile.display_name = dn;
+                    }
+                    if let Some(b) = req.bio {
+                        st.profile.bio = b;
+                    }
+                    if let Some(ac) = req.avatar_color {
+                        st.profile.avatar_color = ac;
+                    }
+                    let ppath = get_profile_path();
+                    let _ = st.profile.save_to_disk(&ppath);
+                }
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{{\"status\":\"updated\"}}",
+                    cors_headers
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/api/discovered" && method == "GET" {
+                let peers_json = {
+                    let st = state_clone.lock().unwrap();
+                    let peers = st.discovery.get_active_peers();
+                    serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_string())
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    cors_headers,
+                    peers_json.len(),
+                    peers_json
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/api/connect_username" && method == "POST" {
+                #[derive(Deserialize)]
+                struct ConnectUserReq {
+                    username: String,
+                }
+                let mut found = None;
+                if let Ok(req) = serde_json::from_str::<ConnectUserReq>(&body) {
+                    let st = state_clone.lock().unwrap();
+                    found = st.discovery.resolve_username(&req.username);
+                }
+                let resp_body = if let Some(peer) = found {
+                    serde_json::to_string(&peer).unwrap_or_else(|_| "{}".to_string())
+                } else {
+                    r#"{"error":"Username not found on local mesh"}"#.to_string()
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    cors_headers,
+                    resp_body.len(),
+                    resp_body
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/contacts" && method == "GET" {
@@ -280,7 +443,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         status: "sent".to_string(),
                     };
 
-                    let target_opt = {
+                    let (target_opt, my_handle) = {
                         let mut st = state_clone.lock().unwrap();
                         let hist = st.messages.entry(req.alias.clone()).or_default();
                         hist.push(msg);
@@ -289,15 +452,14 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             c.last_message = req.text.clone();
                             c.last_time = now_str.clone();
                         }
-                        req.target
+                        (req.target, st.profile.username.clone())
                     };
 
-                    // Forward to target peer over network
                     if let Some(target) = target_opt {
                         if !target.is_empty() {
                             let out_body = format!(
                                 r#"{{"sender":"{}","alias":"{}","text":"{}","time":"{}"}}"#,
-                                my_addr_clone, "Peer", req.text, now_str
+                                my_addr_clone, my_handle, req.text, now_str
                             );
                             let _ = dispatch_http_post(&target, "/api/receive", &out_body).await;
                         }
@@ -389,7 +551,6 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else {
-                // Serve embedded Telegram HTML
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     EMBEDDED_HTML.len(),

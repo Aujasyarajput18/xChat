@@ -175,7 +175,8 @@ mod tests {
 
     #[test]
     fn test_invite_url_generation_and_parsing() {
-        let profile = UserProfile::new("charlie", "Charlie", "xchat_12345", "fp_98765", 1000).unwrap();
+        let profile =
+            UserProfile::new("charlie", "Charlie", "xchat_12345", "fp_98765", 1000).unwrap();
         let invite = profile.generate_invite_url("192.168.1.100:8080");
         assert!(invite.starts_with("xchat://invite/charlie?"));
 
@@ -191,7 +192,14 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("profile.json");
 
-        let profile = UserProfile::new("operator", "Mesh Operator", "xchat_abc123", "fp_xyz789", 12345).unwrap();
+        let profile = UserProfile::new(
+            "operator",
+            "Mesh Operator",
+            "xchat_abc123",
+            "fp_xyz789",
+            12345,
+        )
+        .unwrap();
         profile.save_to_disk(&path).unwrap();
 
         let loaded = UserProfile::load_from_disk(&path).unwrap();
