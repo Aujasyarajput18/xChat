@@ -1062,6 +1062,74 @@
             color: #ffffff;
         }
 
+        /* Emoji Drawer */
+        .emoji-drawer {
+            display: none;
+            flex-direction: column;
+            background: #0d0d0d;
+            border-top: 1px solid var(--border-card);
+            padding: 8px 12px;
+            max-height: 200px;
+            border-radius: 16px 16px 0 0;
+            box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.6);
+            animation: slideUpEmoji 0.18s ease-out;
+        }
+        .emoji-drawer.active {
+            display: flex;
+        }
+        @keyframes slideUpEmoji {
+            from { transform: translateY(12px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .emoji-drawer-header {
+            display: flex;
+            gap: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-subtle);
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .emoji-cat-btn {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            padding: 4px 10px;
+            border-radius: 9999px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.12s ease;
+        }
+        .emoji-cat-btn.active {
+            color: var(--pastel-lavender);
+            background: var(--pastel-lavender-dark);
+            border: 1px solid rgba(212, 196, 251, 0.3);
+        }
+        .emoji-grid-feed {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(36px, 1fr));
+            gap: 4px;
+            overflow-y: auto;
+            padding-top: 8px;
+            max-height: 140px;
+        }
+        .emoji-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            height: 36px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.1s;
+        }
+        .emoji-item:hover {
+            background: #181818;
+            transform: scale(1.15);
+        }
+        .emoji-item:active {
+            transform: scale(0.92);
+        }
+
         /* Sidebar Tab Panes */
         .sidebar-tab-content {
             display: flex;
@@ -1693,10 +1761,24 @@
                     <div class="date-badge">Today</div>
                 </div>
 
+                <!-- Categorized Emoji Drawer -->
+                <div class="emoji-drawer" id="emojiDrawer">
+                    <div class="emoji-drawer-header">
+                        <span class="emoji-cat-btn active" id="emojiCatBtn0" onclick="switchEmojiCat(0)">😀 Smileys</span>
+                        <span class="emoji-cat-btn" id="emojiCatBtn1" onclick="switchEmojiCat(1)">👍 Gestures</span>
+                        <span class="emoji-cat-btn" id="emojiCatBtn2" onclick="switchEmojiCat(2)">⚡ Cyber</span>
+                        <span class="emoji-cat-btn" id="emojiCatBtn3" onclick="switchEmojiCat(3)">💎 Symbols</span>
+                    </div>
+                    <div class="emoji-grid-feed" id="emojiGrid"></div>
+                </div>
+
                 <!-- Bottom Message Input Dock -->
                 <div class="input-bar">
                     <button class="action-circle-btn" onclick="openModal('carrierTransportModal')" title="Attach / Transports">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    </button>
+                    <button class="action-circle-btn" id="emojiToggleBtn" onclick="toggleEmojiDrawer()" title="Emoji Picker">
+                        <span style="font-size:16px;">😊</span>
                     </button>
                     <input type="text" class="input-box" id="msgInput" placeholder="Type encrypted message..." onkeydown="if(event.key==='Enter') sendCurrentMessage()">
                     <button class="btn-send-lavender" onclick="sendCurrentMessage()" title="Send">
@@ -2539,6 +2621,68 @@
                 });
             }
             area.scrollTop = area.scrollHeight;
+        }
+
+        const EMOJI_CATEGORIES = [
+            // 0: Smileys
+            ["😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇", "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😋", "😛", "😜", "🤪", "🤫", "🤔", "🤗", "🤐", "😴", "😷", "🤠", "🥳", "🤩", "😎", "🥺", "😳", "🤯", "🥶", "😱"],
+            // 1: Gestures
+            ["👍", "👎", "👏", "🙌", "🤝", "✌️", "🤞", "🤙", "👊", "✊", "🤛", "🤜", "👈", "👉", "👆", "👇", "☝️", "✋", "🤚", "🖐️", "🖖", "👋", "✍️", "🙏", "💪", "🧠", "👀", "👁️", "🫂", "🫶", "❤️", "🖤", "🤍", "🔥", "✨"],
+            // 2: Cyber
+            ["🔒", "🛡️", "🔑", "🗝️", "💻", "🖥️", "📱", "🛰️", "📡", "🌐", "🌀", "⚡", "🔋", "🔌", "💾", "📼", "🕹️", "🔬", "🔭", "🚀", "🛸", "🚁", "🚨", "💡", "🕯️", "💣", "🧨", "🤖", "🧬", "📻", "🖲️", "🗄️", "⚙️", "🛠️"],
+            // 3: Symbols
+            ["💎", "🔮", "🪐", "🌟", "⭐", "✨", "🔥", "🌊", "🍀", "🌸", "🌺", "🍁", "🍃", "🍄", "🎯", "🎲", "♟️", "🏹", "⚔️", "🏆", "🥇", "🥈", "🥉", "👑", "💍", "💰", "💵", "🎨", "🎭", "🎻", "🌙", "☀️", "🌈", "☕", "🍕"]
+        ];
+
+        let activeEmojiCat = 0;
+
+        function toggleEmojiDrawer() {
+            const drawer = document.getElementById('emojiDrawer');
+            if (!drawer) return;
+            const isOpen = drawer.classList.contains('active');
+            if (isOpen) {
+                drawer.classList.remove('active');
+            } else {
+                drawer.classList.add('active');
+                renderEmojiGrid(activeEmojiCat);
+            }
+        }
+
+        function switchEmojiCat(catIdx) {
+            activeEmojiCat = catIdx;
+            for (let i = 0; i < 4; i++) {
+                const btn = document.getElementById(`emojiCatBtn${i}`);
+                if (btn) {
+                    if (i === catIdx) btn.classList.add('active');
+                    else btn.classList.remove('active');
+                }
+            }
+            renderEmojiGrid(catIdx);
+        }
+
+        function renderEmojiGrid(catIdx) {
+            const grid = document.getElementById('emojiGrid');
+            if (!grid) return;
+            grid.innerHTML = '';
+            const list = EMOJI_CATEGORIES[catIdx] || EMOJI_CATEGORIES[0];
+            list.forEach(emoji => {
+                const item = document.createElement('div');
+                item.className = 'emoji-item';
+                item.innerText = emoji;
+                item.onclick = () => insertEmoji(emoji);
+                grid.appendChild(item);
+            });
+        }
+
+        function insertEmoji(char) {
+            const input = document.getElementById('msgInput');
+            if (!input) return;
+            const start = input.selectionStart || input.value.length;
+            const end = input.selectionEnd || input.value.length;
+            const val = input.value;
+            input.value = val.substring(0, start) + char + val.substring(end);
+            input.selectionStart = input.selectionEnd = start + char.length;
+            input.focus();
         }
 
         async function sendCurrentMessage() {
