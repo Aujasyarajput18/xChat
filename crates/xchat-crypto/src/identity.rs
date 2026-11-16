@@ -91,6 +91,22 @@ impl IdentityPublicKey {
         hex::encode(self.sign_pubkey)
     }
 
+    /// Visual fingerprint representation (6 memorable symbols) for human out-of-band verification.
+    pub fn visual_fingerprint(&self) -> String {
+        const EMOJI_ALPHABET: [&str; 32] = [
+            "🪐", "🚀", "🛰️", "🛡️", "💎", "⚡", "🌊", "🔥", "🌲", "🌸", "🍀", "🦊", "🦅", "🦉",
+            "🐬", "🦋", "⚓", "🧭", "🔑", "🔒", "🔮", "🧬", "🌟", "🌕", "🌈", "🏔️", "☕", "🎯",
+            "🧩", "🕊️", "🦁", "👑",
+        ];
+        let bytes = &self.sign_pubkey;
+        let mut symbols = String::with_capacity(24);
+        for i in 0..6 {
+            let idx = (bytes[i] as usize ^ (bytes[i + 6] as usize)) % EMOJI_ALPHABET.len();
+            symbols.push_str(EMOJI_ALPHABET[idx]);
+        }
+        symbols
+    }
+
     /// Compute rotating ephemeral discovery token for metadata-safe nearby advertising.
     pub fn ephemeral_discovery_token(&self, epoch: u64) -> [u8; 16] {
         derive_discovery_token(&self.sign_pubkey, epoch)
@@ -127,5 +143,15 @@ mod tests {
         let secret_ba = bob.diffie_hellman(&alice_pub.dh_pubkey);
 
         assert_eq!(secret_ab, secret_ba);
+    }
+
+    #[test]
+    fn test_visual_fingerprint_deterministic() {
+        let alice = IdentityKeyPair::generate();
+        let pub1 = alice.public_key();
+        let fp1 = pub1.visual_fingerprint();
+        let fp2 = pub1.visual_fingerprint();
+        assert_eq!(fp1, fp2);
+        assert!(!fp1.is_empty());
     }
 }
