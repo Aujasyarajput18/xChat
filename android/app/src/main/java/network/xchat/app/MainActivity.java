@@ -74,12 +74,21 @@ public class MainActivity extends Activity {
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
                 return true;
             }
+
+            @Override
+            public void onPermissionRequest(final android.webkit.PermissionRequest request) {
+                request.grant(request.getResources());
+            }
         });
     }
 
     private void checkAndRequestPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             List<String> neededPermissions = new ArrayList<>();
+
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                neededPermissions.add(Manifest.permission.CAMERA);
+            }
 
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 neededPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
