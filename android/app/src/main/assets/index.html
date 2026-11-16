@@ -1700,24 +1700,43 @@
         </main>
     </div>
 
-    <!-- Modal 1: Add Peer / New Chat -->
+    <!-- Modal 1: Smart Connect (@username, invite URI, or IP:Port) -->
     <div class="modal-overlay" id="addPeerModal">
-        <div class="modal-card">
-            <div class="modal-title">New Secure Peer</div>
-            <div class="modal-desc">Connect directly to a peer across Wi-Fi, hotspot, or local network.</div>
+        <div class="modal-card" style="max-width: 400px;">
+            <div class="modal-title font-serif" style="font-size: 20px;">Smart Connect Peer</div>
+            <div class="modal-desc">Connect seamlessly using a @username, invite link, or IP:Port.</div>
 
-            <label class="form-label">Contact Name / Alias</label>
-            <input type="text" class="form-input" id="newAliasInput" placeholder="e.g. Station Alpha, Alice Phone">
+            <div style="margin-bottom: 14px;">
+                <label class="form-label" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span>Peer Identifier</span>
+                    <span style="font-size:10.5px; color:var(--pastel-lavender); cursor:pointer;" onclick="closeModal('addPeerModal'); openScannerFromQr();">📷 Scan QR</span>
+                </label>
+                <div style="position:relative;">
+                    <input type="text" class="form-input font-mono" id="smartPeerInput" placeholder="@username, invite link, or IP:Port" oninput="onSmartPeerInputChanged(this.value)">
+                </div>
+                <div id="smartResolutionFeedback" style="font-size:11px; margin-top:6px; min-height:18px; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
+                    Enter a peer @username or paste an invite link.
+                </div>
+            </div>
 
-            <label class="form-label">Peer Socket Address (IP:Port)</label>
-            <input type="text" class="form-input font-mono" id="newTargetInput" placeholder="192.168.1.15:9400 or 127.0.0.1:8081">
+            <div style="margin-bottom: 14px;">
+                <label class="form-label">Display Nickname (Optional)</label>
+                <input type="text" class="form-input" id="newAliasInput" placeholder="e.g. Alice, HQ Station">
+            </div>
 
-            <label class="form-label">Air-Gap Prekey Bundle (Optional)</label>
-            <textarea class="form-input font-mono" id="newBundleInput" rows="2" placeholder="Leave empty for automatic key exchange..."></textarea>
+            <details style="background:#080808; border:1px solid var(--border-subtle); border-radius:12px; padding:10px 12px; margin-bottom:16px;">
+                <summary style="font-size:11.5px; color:var(--text-secondary); cursor:pointer; font-weight:600; outline:none;">⚙️ Advanced Connection Overrides</summary>
+                <div style="margin-top:10px;">
+                    <label class="form-label" style="font-size:10.5px;">Resolved Socket Target</label>
+                    <input type="text" class="form-input font-mono" id="newTargetInput" style="font-size:11px;" placeholder="Auto-resolved from username or invite">
+                    <label class="form-label" style="font-size:10.5px; margin-top:8px;">Air-Gap Prekey Bundle</label>
+                    <textarea class="form-input font-mono" id="newBundleInput" rows="2" style="font-size:10.5px;" placeholder="Leave blank for automatic X3DH exchange"></textarea>
+                </div>
+            </details>
 
             <div class="modal-actions">
                 <button class="btn-action btn-cancel" onclick="closeModal('addPeerModal')">Cancel</button>
-                <button class="btn-action btn-primary" onclick="confirmAddPeer()">Start Chatting</button>
+                <button class="btn-action btn-primary" onclick="confirmSmartConnect()">Connect Link</button>
             </div>
         </div>
     </div>
@@ -2571,26 +2590,171 @@
             } catch(e) {}
         }
 
-        async function confirmAddPeer() {
-            const alias = document.getElementById('newAliasInput').value.trim();
-            const target = document.getElementById('newTargetInput').value.trim();
+        let smartResolvedTarget = null;
+        let smartResolvedPeer = null;
+
+        async function onSmartPeerInputChanged(val) {
+            const raw = val.trim();
+            const feedback = document.getElementById('smartResolutionFeedback');
+            const targetField = document.getElementById('newTargetInput');
+            const aliasField = document.getElementById('newAliasInput');
+            smartResolvedTarget = null;
+            smartResolvedPeer = null;
+
+            if (!raw) {
+                if (feedback) {
+                    feedback.innerText = "Enter a peer @username or paste an invite link.";
+                    feedback.style.color = "var(--text-muted)";
+                }
+                return;
+            }
+
+            // 1. Is it an invite URL?
+            if (raw.startsWith("xchat://invite/")) {
+                const parsed = parseInvitePayload(raw);
+                if (parsed) {
+                    smartResolvedTarget = parsed.target;
+                    smartResolvedPeer = parsed;
+                    if (targetField) targetField.value = parsed.target;
+                    if (aliasField && !aliasField.value) aliasField.value = parsed.username;
+                    if (feedback) {
+                        feedback.innerHTML = `✓ Invite link valid: <b style="color:var(--pastel-lavender);">${escapeHtml(parsed.username)}</b> (${parsed.target})`;
+                        feedback.style.color = "var(--status-green)";
+                    }
+                    return;
+                }
+            }
+
+            // 2. Is it a raw IP:Port?
+            if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{2,5}$/.test(raw)) {
+                smartResolvedTarget = raw;
+                if (targetField) targetField.value = raw;
+                if (aliasField && !aliasField.value) aliasField.value = "Peer " + raw.split(':')[0].split('.').pop();
+                if (feedback) {
+                    feedback.innerText = "✓ Direct socket endpoint detected.";
+                    feedback.style.color = "var(--status-green)";
+                }
+                return;
+            }
+
+            // 3. Is it a @username or plain username handle?
+            let u = raw;
+            if (!u.startsWith('@') && !u.includes(':') && !u.includes('/')) {
+                u = '@' + u;
+            }
+
+            if (u.startsWith('@')) {
+                if (feedback) {
+                    feedback.innerText = `🔍 Resolving ${u} on local mesh...`;
+                    feedback.style.color = "var(--text-secondary)";
+                }
+
+                let cached = lastDiscoveredPeers.find(p => p.username && p.username.toLowerCase() === u.toLowerCase());
+                if (cached) {
+                    const sock = `${cached.ip}:${cached.port}`;
+                    smartResolvedTarget = sock;
+                    smartResolvedPeer = cached;
+                    if (targetField) targetField.value = sock;
+                    if (aliasField && !aliasField.value) aliasField.value = cached.display_name || cached.username;
+                    if (feedback) {
+                        feedback.innerHTML = `✓ Found <b style="color:var(--pastel-lavender);">${escapeHtml(u)}</b> on local Wi-Fi: ${sock}`;
+                        feedback.style.color = "var(--status-green)";
+                    }
+                    return;
+                }
+
+                if (isNative && window.AndroidBridge && window.AndroidBridge.resolveUsername) {
+                    try {
+                        const res = window.AndroidBridge.resolveUsername(u);
+                        const data = JSON.parse(res || '{}');
+                        if (data && data.ip && data.port) {
+                            const sock = `${data.ip}:${data.port}`;
+                            smartResolvedTarget = sock;
+                            smartResolvedPeer = data;
+                            if (targetField) targetField.value = sock;
+                            if (aliasField && !aliasField.value) aliasField.value = data.display_name || data.username;
+                            if (feedback) {
+                                feedback.innerHTML = `✓ Found <b style="color:var(--pastel-lavender);">${escapeHtml(u)}</b> on mesh: ${sock}`;
+                                feedback.style.color = "var(--status-green)";
+                            }
+                            return;
+                        }
+                    } catch(e) {}
+                } else {
+                    try {
+                        const resp = await fetch(API_BASE + '/api/connect_username', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: u })
+                        });
+                        if (resp.ok) {
+                            const data = await resp.json();
+                            if (data && data.ip && data.port) {
+                                const sock = `${data.ip}:${data.port}`;
+                                smartResolvedTarget = sock;
+                                smartResolvedPeer = data;
+                                if (targetField) targetField.value = sock;
+                                if (aliasField && !aliasField.value) aliasField.value = data.display_name || data.username;
+                                if (feedback) {
+                                    feedback.innerHTML = `✓ Found <b style="color:var(--pastel-lavender);">${escapeHtml(u)}</b> on LAN: ${sock}`;
+                                    feedback.style.color = "var(--status-green)";
+                                }
+                                return;
+                            }
+                        }
+                    } catch(e) {}
+                }
+
+                if (feedback) {
+                    feedback.innerText = `Searching mesh for ${u}... Make sure peer is on same Wi-Fi.`;
+                    feedback.style.color = "var(--pastel-lavender)";
+                }
+            }
+        }
+
+        async function confirmSmartConnect() {
+            const raw = document.getElementById('smartPeerInput').value.trim();
+            const manualTarget = document.getElementById('newTargetInput').value.trim();
+            let alias = document.getElementById('newAliasInput').value.trim();
             const bundle = document.getElementById('newBundleInput').value.trim();
 
+            const target = smartResolvedTarget || manualTarget || (raw.includes(':') ? raw : null);
+
             if (!alias) {
-                alert('Please enter a peer name or alias.');
+                if (smartResolvedPeer && (smartResolvedPeer.display_name || smartResolvedPeer.username)) {
+                    alias = smartResolvedPeer.display_name || smartResolvedPeer.username;
+                } else if (raw.startsWith('@')) {
+                    alias = raw;
+                } else if (target) {
+                    alias = 'Peer ' + target.split(':')[0].split('.').pop();
+                } else {
+                    alias = 'Peer';
+                }
+            }
+
+            if (!target) {
+                alert(`⚠️ Could not resolve a socket target for "${raw}".\nIf connecting to a username, ensure peer's xChat is running on the same Wi-Fi/mesh, or specify IP:Port.`);
                 return;
             }
 
             const newPeer = {
                 alias: alias,
-                target: target || '127.0.0.1:8080',
+                target: target,
                 bundle: bundle,
+                fingerprint: smartResolvedPeer ? (smartResolvedPeer.fingerprint || '') : '',
+                address: smartResolvedPeer ? (smartResolvedPeer.address || '') : '',
                 status: 'Connected',
-                last_message: 'Tap to chat',
-                last_time: ''
+                last_message: 'Connected via Smart Connect',
+                last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             };
 
-            contacts.push(newPeer);
+            let existingIdx = contacts.findIndex(c => c.alias === alias || c.target === target);
+            if (existingIdx !== -1) {
+                contacts[existingIdx] = newPeer;
+            } else {
+                contacts.push(newPeer);
+            }
+
             Storage.set('contacts', JSON.stringify(contacts));
 
             if (!isNative) {
@@ -2607,10 +2771,13 @@
             selectContact(newPeer);
             closeModal('addPeerModal');
 
+            document.getElementById('smartPeerInput').value = '';
             document.getElementById('newAliasInput').value = '';
             document.getElementById('newTargetInput').value = '';
             document.getElementById('newBundleInput').value = '';
         }
+
+        const confirmAddPeer = confirmSmartConnect;
 
         function pingActivePeer() {
             if (!activeContact) return;
