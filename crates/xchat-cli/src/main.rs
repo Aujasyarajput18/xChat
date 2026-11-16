@@ -11,6 +11,7 @@ use xchat_core::{
     envelope::EncryptedEnvelope,
     keystore::KeyStore,
     mixnet::{MixPool, MixPoolConfig},
+    profile::UserProfile,
     relay::RelayNode,
     session::Session,
     sos::create_emergency_beacon,
@@ -18,6 +19,7 @@ use xchat_core::{
 use xchat_crypto::x3dh::PrekeyBundle;
 use xchat_transport::{
     audio_modem::AudioCallModem,
+    discovery::{DiscoveryBeacon, PeerDiscoveryEngine, DEFAULT_DISCOVERY_PORT},
     mesh_sim::{BleMeshSimulationTransport, SharedRadioMedium},
     sms::SmsCarrier,
     tcp::TcpTransport,
@@ -157,6 +159,26 @@ enum Commands {
         /// Number of nodes in simulation
         #[arg(short, long, default_value_t = 3)]
         nodes: usize,
+    },
+
+    /// Manage local human-friendly username profile (@handle) and visual identity
+    Profile {
+        /// Optional new username to set (e.g. @alice or bob)
+        #[arg(short, long)]
+        username: Option<String>,
+        /// Optional display name (e.g. "Alice Smith")
+        #[arg(short, long)]
+        display_name: Option<String>,
+        /// Generate a shareable xchat://invite link
+        #[arg(short, long)]
+        invite: bool,
+    },
+
+    /// Discover nearby active peers over zero-configuration local wireless beacon
+    Discover {
+        /// Timeout in seconds to listen for nearby announcements
+        #[arg(short, long, default_value_t = 3)]
+        timeout: u64,
     },
 }
 
@@ -589,6 +611,98 @@ async fn main() -> anyhow::Result<()> {
             println!("[Privacy] Zero sender metadata was exposed in ping envelope.");
         }
 
+        Commands::Profile {
+            username,
+            display_name,
+            invite,
+        } => {
+            let profile_path = get_default_profile_path();
+            let keystore = KeyStore::generate();
+            let pub_key = keystore.identity.public_key();
+            let addr = pub_key.address();
+            let fp = pub_key.fingerprint();
+            let visual_fp = pub_key.visual_fingerprint();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs();
+
+            let mut profile = UserProfile::load_from_disk(&profile_path).unwrap_or_else(|_| {
+                UserProfile::new(&addr[6..14], "Mesh Operator", &addr, &fp, now).unwrap()
+            });
+
+            if let Some(u) = username {
+                profile.username = UserProfile::validate_and_normalize_username(&u)?;
+            }
+            if let Some(dn) = display_name {
+                profile.display_name = dn;
+            }
+
+            profile.save_to_disk(&profile_path)?;
+
+            println!("=======================================================");
+            println!("             xChat Operator Identity Profile           ");
+            println!("=======================================================");
+            println!("Username:           {}", profile.username);
+            println!("Display Name:       {}", profile.display_name);
+            println!("Cryptographic Addr: {}", profile.address);
+            println!("Safety Fingerprint: {}", profile.fingerprint);
+            println!("Visual Safety Code: {}", visual_fp);
+
+            if invite {
+                let local_socket = "127.0.0.1:8080";
+                let url = profile.generate_invite_url(local_socket);
+                println!("-------------------------------------------------------");
+                println!("Shareable Invite URI: {}", url);
+            }
+        }
+
+        Commands::Discover { timeout } => {
+            println!("=======================================================");
+            println!("      xChat Zero-Config Local Peer Discovery Engine    ");
+            println!("=======================================================");
+            println!("[*] Binding UDP beacon listener and probing nearby mesh...");
+
+            let engine = PeerDiscoveryEngine::bind(0, DEFAULT_DISCOVERY_PORT).await?;
+            let keystore = KeyStore::generate();
+            let pub_key = keystore.identity.public_key();
+
+            let beacon = DiscoveryBeacon::new(
+                "@local_cli",
+                "CLI Prober",
+                &pub_key.address(),
+                &pub_key.fingerprint(),
+                8080,
+            );
+
+            engine.broadcast_beacon(&beacon).await?;
+            println!(
+                "[*] Broadcast beacon dispatched. Listening for {}s...",
+                timeout
+            );
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(timeout)).await;
+
+            let peers = engine.get_active_peers();
+            if peers.is_empty() {
+                println!(
+                    "[i] No nearby peers responded on UDP port {}.",
+                    DEFAULT_DISCOVERY_PORT
+                );
+                println!(
+                    "    Tip: Ensure other nodes are running on the same local Wi-Fi or hotspot."
+                );
+            } else {
+                println!("[✓] Discovered {} nearby active peer(s):", peers.len());
+                for p in peers {
+                    println!(
+                        "    • {} ({}) -> Socket: {}",
+                        p.username, p.display_name, p.socket_addr
+                    );
+                }
+            }
+            engine.shutdown();
+        }
+
         Commands::SimulateMesh { nodes } => {
             run_comprehensive_mesh_simulation(nodes).await?;
         }
@@ -803,6 +917,14 @@ fn get_default_contacts_path() -> PathBuf {
         PathBuf::from(home).join(".xchat_contacts.bin")
     } else {
         PathBuf::from(".xchat_contacts.bin")
+    }
+}
+
+fn get_default_profile_path() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".xchat_profile.json")
+    } else {
+        PathBuf::from(".xchat_profile.json")
     }
 }
 
