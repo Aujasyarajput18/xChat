@@ -1348,6 +1348,9 @@
                 <div class="dropdown-item" onclick="closeDropdown(); openModal('qrModal');">
                     <span>📱 Air-Gap QR Identity</span>
                 </div>
+                <div class="dropdown-item" onclick="closeDropdown(); shareInviteLink();">
+                    <span>🔗 Share Invite Link</span>
+                </div>
                 <div class="dropdown-item" onclick="closeDropdown(); openModal('profileModal');">
                     <span>👤 My Profile & Keys</span>
                 </div>
@@ -2408,6 +2411,23 @@
                 alert(`⚡ Peer pinged across local mesh.`);
             }
         };
+
+        function shareInviteLink() {
+            const inviteUri = generateInviteUri();
+            if (window.AndroidBridge && window.AndroidBridge.shareAddress) {
+                window.AndroidBridge.shareAddress(inviteUri);
+            } else if (navigator.share) {
+                navigator.share({
+                    title: "Connect on xChat",
+                    text: `Connect with me on xChat private decentralized mesh:\n${inviteUri}`,
+                    url: inviteUri
+                }).catch(() => {
+                    copyInviteUrl();
+                });
+            } else {
+                copyInviteUrl();
+            }
+        }
 
         function copyMySocket() {
             const text = myIdentity.reachable;
