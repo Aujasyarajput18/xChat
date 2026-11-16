@@ -1742,16 +1742,56 @@
         </div>
     </div>
 
-    <!-- Modal 5: Profile & Identity -->
+    <!-- Modal 5: Interactive Profile & Identity Editor -->
     <div class="modal-overlay" id="profileModal">
-        <div class="modal-card">
-            <div class="modal-title">My Cryptographic Profile</div>
-            <div class="modal-desc">Your anonymous identity on the decentralized mesh.</div>
-            <div style="font-size: 12.5px; font-family: 'JetBrains Mono', monospace; line-height: 1.6; color: var(--text-secondary); background: #080808; border: 1px solid var(--border-card); padding: 14px; border-radius: 14px; margin-bottom: 16px; word-break: break-all;" id="profileDetailsBody">
-                ...
+        <div class="modal-card" style="max-width: 400px;">
+            <div class="modal-title font-serif" style="font-size: 20px;">Mesh Identity & Profile</div>
+            <div class="modal-desc">Configure your anonymous presence broadcasted over local radio.</div>
+
+            <!-- Avatar Preview & Color Swatches -->
+            <div style="display: flex; align-items: center; gap: 16px; margin: 16px 0;">
+                <div id="profileAvatarPreview" class="contact-avatar-squircle" style="width: 56px; height: 56px; font-size: 22px; background: linear-gradient(135deg, #d4c4fb, #b8a0f8); flex-shrink: 0;">
+                    U
+                </div>
+                <div>
+                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Avatar Accent</div>
+                    <div style="display: flex; gap: 8px;">
+                        <div class="swatch-btn" onclick="selectAvatarColor(0)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #d4c4fb, #b8a0f8); cursor:pointer; border:2px solid #fff;"></div>
+                        <div class="swatch-btn" onclick="selectAvatarColor(1)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #d2e8b8, #b6d994); cursor:pointer; border:2px solid transparent;"></div>
+                        <div class="swatch-btn" onclick="selectAvatarColor(2)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #fcd34d, #f59e0b); cursor:pointer; border:2px solid transparent;"></div>
+                        <div class="swatch-btn" onclick="selectAvatarColor(3)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #93c5fd, #60a5fa); cursor:pointer; border:2px solid transparent;"></div>
+                        <div class="swatch-btn" onclick="selectAvatarColor(4)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #f472b6, #ec4899); cursor:pointer; border:2px solid transparent;"></div>
+                    </div>
+                </div>
             </div>
+
+            <!-- Profile Form -->
+            <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:16px;">
+                <div>
+                    <label style="font-size:11px; color:var(--text-secondary); display:block; margin-bottom:4px; font-weight:600;">Username Handle</label>
+                    <input id="profileUsernameInput" class="form-input font-mono" placeholder="@username" oninput="onProfileUsernameChanged(this.value)" />
+                </div>
+                <div>
+                    <label style="font-size:11px; color:var(--text-secondary); display:block; margin-bottom:4px; font-weight:600;">Display Name</label>
+                    <input id="profileDisplayNameInput" class="form-input" placeholder="Mesh Operator" oninput="onProfileDisplayNameChanged(this.value)" />
+                </div>
+                <div>
+                    <label style="font-size:11px; color:var(--text-secondary); display:block; margin-bottom:4px; font-weight:600;">Status Bio</label>
+                    <input id="profileBioInput" class="form-input" placeholder="Zero Metadata • Direct P2P" />
+                </div>
+            </div>
+
+            <!-- Cryptographic Keys Summary Box -->
+            <details style="background:#080808; border:1px solid var(--border-card); border-radius:12px; padding:10px 12px; margin-bottom:18px;">
+                <summary style="font-size:11.5px; color:var(--pastel-lavender); cursor:pointer; font-weight:600; outline:none;">🔐 View Cryptographic Keys & Safety Code</summary>
+                <div style="font-size:10.5px; font-family:'JetBrains Mono',monospace; line-height:1.6; color:var(--text-secondary); margin-top:10px; word-break:break-all;" id="profileDetailsBody">
+                    ...
+                </div>
+            </details>
+
             <div class="modal-actions">
-                <button class="btn-action btn-primary" onclick="closeModal('profileModal')">Done</button>
+                <button class="btn-action btn-cancel" onclick="closeModal('profileModal')">Cancel</button>
+                <button class="btn-action btn-primary" onclick="saveUserProfile()">Save Profile</button>
             </div>
         </div>
     </div>
@@ -2751,10 +2791,111 @@
             }
         });
 
+        let selectedAvatarIndex = parseInt(Storage.get('my_avatar_index') || '0', 10);
+
+        function selectAvatarColor(index) {
+            selectedAvatarIndex = index;
+            const preview = document.getElementById('profileAvatarPreview');
+            if (preview && AVATAR_PALETTE[index]) {
+                preview.style.background = AVATAR_PALETTE[index];
+            }
+            document.querySelectorAll('.swatch-btn').forEach((btn, i) => {
+                btn.style.borderColor = (i === index) ? '#ffffff' : 'transparent';
+            });
+        }
+
+        function onProfileUsernameChanged(val) {
+            let clean = val.trim();
+            if (clean && !clean.startsWith('@')) clean = '@' + clean;
+            const initial = clean ? clean.replace('@', '').charAt(0).toUpperCase() : 'U';
+            const preview = document.getElementById('profileAvatarPreview');
+            if (preview && !document.getElementById('profileDisplayNameInput').value.trim()) {
+                preview.innerText = initial;
+            }
+        }
+
+        function onProfileDisplayNameChanged(val) {
+            const preview = document.getElementById('profileAvatarPreview');
+            if (preview && val.trim()) {
+                preview.innerText = val.trim().charAt(0).toUpperCase();
+            }
+        }
+
+        function populateProfileModal() {
+            const uInput = document.getElementById('profileUsernameInput');
+            const dInput = document.getElementById('profileDisplayNameInput');
+            const bInput = document.getElementById('profileBioInput');
+            if (uInput) uInput.value = myIdentity.username || '@operator';
+            if (dInput) dInput.value = myIdentity.displayName || 'Mesh Operator';
+            if (bInput) bInput.value = Storage.get('my_bio') || 'Zero Metadata • Direct P2P';
+
+            const preview = document.getElementById('profileAvatarPreview');
+            if (preview) {
+                preview.innerText = (myIdentity.displayName || myIdentity.username || 'U').replace('@', '').charAt(0).toUpperCase();
+                if (AVATAR_PALETTE[selectedAvatarIndex]) preview.style.background = AVATAR_PALETTE[selectedAvatarIndex];
+            }
+            selectAvatarColor(selectedAvatarIndex);
+
+            const detailsBody = document.getElementById('profileDetailsBody');
+            if (detailsBody) {
+                detailsBody.innerText = 
+                    `Username:       ${myIdentity.username || '@operator'}\n` +
+                    `Display Name:   ${myIdentity.displayName || 'Mesh Operator'}\n` +
+                    `Address:        ${myIdentity.address}\n` +
+                    `Reachable:      ${myIdentity.reachable}\n` +
+                    `Fingerprint:    ${myIdentity.fingerprint}\n` +
+                    `Visual Safety:  ${myIdentity.visualFingerprint || getVisualFingerprintEmojis(myIdentity.fingerprint)}\n` +
+                    `Radio Carrier:  Local UDP Beacon Radar (Port 9444)\n` +
+                    `Mixnet Onion:   Sphinx Routing (3 hops)`;
+            }
+        }
+
+        async function saveUserProfile() {
+            let uVal = document.getElementById('profileUsernameInput').value.trim();
+            if (!uVal) uVal = '@operator';
+            if (!uVal.startsWith('@')) uVal = '@' + uVal;
+
+            let dVal = document.getElementById('profileDisplayNameInput').value.trim();
+            if (!dVal) dVal = 'Mesh Operator';
+
+            const bVal = document.getElementById('profileBioInput').value.trim();
+
+            myIdentity.username = uVal;
+            myIdentity.displayName = dVal;
+            Storage.set('my_username', uVal);
+            Storage.set('my_display_name', dVal);
+            Storage.set('my_bio', bVal);
+            Storage.set('my_avatar_index', String(selectedAvatarIndex));
+
+            if (!isNative) {
+                try {
+                    await fetch(API_BASE + '/api/profile', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username: uVal,
+                            display_name: dVal,
+                            bio: bVal,
+                            avatar_color: selectedAvatarIndex
+                        })
+                    });
+                } catch(e) {}
+            } else if (window.AndroidBridge && window.AndroidBridge.updateDiscoveryProfile) {
+                window.AndroidBridge.updateDiscoveryProfile(uVal, dVal, myIdentity.address, myIdentity.fingerprint);
+            }
+
+            updateQrDisplay();
+            closeModal('profileModal');
+            alert(`✅ Profile updated! Broadcasting as ${uVal} (${dVal}) across local mesh.`);
+        }
+
         function openModal(id) {
             document.getElementById(id).classList.add('active');
             if (id === 'qrModal') {
                 updateQrDisplay();
+            }
+            if (id === 'profileModal') {
+                populateProfileModal();
             }
         }
         function closeModal(id) { document.getElementById(id).classList.remove('active'); }
