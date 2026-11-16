@@ -5,6 +5,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -14,6 +15,8 @@ import android.widget.Toast;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -24,6 +27,9 @@ import java.net.URL;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class AndroidBridge {
@@ -33,19 +39,227 @@ public class AndroidBridge {
     private int listenPort = 9400;
     private volatile boolean isServerRunning = false;
 
+    // UDP Peer Discovery
+    private static final int DISCOVERY_PORT = 9444;
+    private DatagramSocket udpSocket;
+    private volatile boolean isDiscoveryRunning = false;
+    private WifiManager.MulticastLock multicastLock;
+    private final Map<String, DiscoveredPeerInfo> discoveredPeers = new ConcurrentHashMap<>();
+
+    private String myUsername = "";
+    private String myDisplayName = "";
+    private String myMeshAddress = "";
+    private String myFingerprint = "";
+
+    public static class DiscoveredPeerInfo {
+        public String username;
+        public String displayName;
+        public String address;
+        public String fingerprint;
+        public String ip;
+        public int port;
+        public long lastSeen;
+
+        public JSONObject toJson() {
+            try {
+                JSONObject obj = new JSONObject();
+                obj.put("username", username);
+                obj.put("display_name", displayName);
+                obj.put("address", address);
+                obj.put("fingerprint", fingerprint);
+                obj.put("ip", ip);
+                obj.put("port", port);
+                obj.put("last_seen", lastSeen);
+                return obj;
+            } catch (Exception e) {
+                return new JSONObject();
+            }
+        }
+    }
+
     public AndroidBridge(MainActivity activity) {
         this.activity = activity;
         this.prefs = activity.getSharedPreferences("xchat_prefs", Context.MODE_PRIVATE);
+        this.myUsername = prefs.getString("username", "user_" + (int)(Math.random() * 89999 + 10000));
+        this.myDisplayName = prefs.getString("display_name", "Android Node");
+        this.myMeshAddress = prefs.getString("my_address", "xchat_android");
+        this.myFingerprint = prefs.getString("fingerprint", "");
+
         startReceiverServer();
+        startDiscoveryEngine();
     }
 
     public void cleanup() {
         isServerRunning = false;
+        isDiscoveryRunning = false;
         if (serverSocket != null) {
             try {
                 serverSocket.close();
             } catch (Exception ignored) {}
         }
+        if (udpSocket != null) {
+            try {
+                udpSocket.close();
+            } catch (Exception ignored) {}
+        }
+        if (multicastLock != null && multicastLock.isHeld()) {
+            try {
+                multicastLock.release();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void startDiscoveryEngine() {
+        try {
+            WifiManager wm = (WifiManager) activity.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                multicastLock = wm.createMulticastLock("xchat_discovery_lock");
+                multicastLock.setReferenceCounted(true);
+                multicastLock.acquire();
+            }
+        } catch (Exception ignored) {}
+
+        isDiscoveryRunning = true;
+
+        // UDP Receiver Thread
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    try {
+                        udpSocket = new DatagramSocket(DISCOVERY_PORT);
+                    } catch (Exception portTaken) {
+                        udpSocket = new DatagramSocket(0);
+                    }
+                    udpSocket.setBroadcast(true);
+
+                    byte[] buffer = new byte[2048];
+                    while (isDiscoveryRunning && !udpSocket.isClosed()) {
+                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                        udpSocket.receive(packet);
+                        String raw = new String(packet.getData(), 0, packet.getLength(), "UTF-8");
+                        handleDiscoveryPacket(raw, packet.getAddress().getHostAddress());
+                    }
+                } catch (Exception ignored) {}
+            }
+        }).start();
+
+        // Periodic UDP Beacon Broadcast Thread
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (isDiscoveryRunning) {
+                    try {
+                        broadcastBeacon();
+                        Thread.sleep(4000);
+                    } catch (Exception ignored) {}
+                }
+            }
+        }).start();
+    }
+
+    private void handleDiscoveryPacket(String jsonStr, String senderIp) {
+        try {
+            JSONObject obj = new JSONObject(jsonStr);
+            String u = obj.optString("username", "");
+            String addr = obj.optString("address", "");
+            if (addr.equals(myMeshAddress)) {
+                return; // Ignore self broadcast
+            }
+            DiscoveredPeerInfo peer = new DiscoveredPeerInfo();
+            peer.username = u;
+            peer.displayName = obj.optString("display_name", u);
+            peer.address = addr;
+            peer.fingerprint = obj.optString("fingerprint", "");
+            peer.port = obj.optInt("port", 9400);
+            peer.ip = senderIp;
+            peer.lastSeen = System.currentTimeMillis();
+
+            discoveredPeers.put(addr, peer);
+
+            // Notify WebView
+            activity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String js = "if (window.onNearbyPeersUpdated) { window.onNearbyPeersUpdated(); }";
+                        activity.getWebView().evaluateJavascript(js, null);
+                    } catch (Exception ignored) {}
+                }
+            });
+        } catch (Exception ignored) {}
+    }
+
+    private void broadcastBeacon() {
+        if (udpSocket == null || udpSocket.isClosed()) return;
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("username", myUsername.startsWith("@") ? myUsername : "@" + myUsername);
+            obj.put("display_name", myDisplayName);
+            obj.put("address", myMeshAddress);
+            obj.put("fingerprint", myFingerprint);
+            obj.put("port", listenPort);
+            obj.put("timestamp", System.currentTimeMillis() / 1000);
+
+            byte[] bytes = obj.toString().getBytes("UTF-8");
+            DatagramPacket packet = new DatagramPacket(
+                bytes,
+                bytes.length,
+                InetAddress.getByName("255.255.255.255"),
+                DISCOVERY_PORT
+            );
+            udpSocket.send(packet);
+        } catch (Exception ignored) {}
+    }
+
+    @JavascriptInterface
+    public void updateDiscoveryProfile(String username, String displayName, String address, String fingerprint) {
+        this.myUsername = username != null ? username : "";
+        this.myDisplayName = displayName != null ? displayName : "";
+        this.myMeshAddress = address != null ? address : "";
+        this.myFingerprint = fingerprint != null ? fingerprint : "";
+
+        prefs.edit()
+            .putString("username", this.myUsername)
+            .putString("display_name", this.myDisplayName)
+            .putString("my_address", this.myMeshAddress)
+            .putString("fingerprint", this.myFingerprint)
+            .apply();
+
+        // Trigger immediate beacon broadcast
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                broadcastBeacon();
+            }
+        }).start();
+    }
+
+    @JavascriptInterface
+    public String getDiscoveredPeers() {
+        JSONArray arr = new JSONArray();
+        long now = System.currentTimeMillis();
+        for (DiscoveredPeerInfo peer : discoveredPeers.values()) {
+            // Expire peers after 60s
+            if (now - peer.lastSeen < 60000) {
+                arr.put(peer.toJson());
+            }
+        }
+        return arr.toString();
+    }
+
+    @JavascriptInterface
+    public String resolveUsername(String username) {
+        if (username == null) return "{}";
+        String clean = username.trim();
+        if (!clean.startsWith("@")) clean = "@" + clean;
+        long now = System.currentTimeMillis();
+        for (DiscoveredPeerInfo peer : discoveredPeers.values()) {
+            if (now - peer.lastSeen < 60000 && peer.username.equalsIgnoreCase(clean)) {
+                return peer.toJson().toString();
+            }
+        }
+        return "{}";
     }
 
     private void startReceiverServer() {
@@ -112,8 +326,8 @@ public class AndroidBridge {
                 String resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\n\r\n";
                 os.write(resp.getBytes("UTF-8"));
             } else if (path.startsWith("/api/identity")) {
-                String myAddr = prefs.getString("my_address", "xchat_android");
-                String respBody = "{\"address\":\"" + myAddr + "\",\"alias\":\"Android Node\",\"ip\":\"" + getLocalIpAddress() + "\",\"port\":" + listenPort + ",\"status\":\"online\"}";
+                String myAddr = prefs.getString("my_address", myMeshAddress);
+                String respBody = "{\"address\":\"" + myAddr + "\",\"username\":\"" + myUsername + "\",\"display_name\":\"" + myDisplayName + "\",\"fingerprint\":\"" + myFingerprint + "\",\"ip\":\"" + getLocalIpAddress() + "\",\"port\":" + listenPort + ",\"status\":\"online\"}";
                 String resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + respBody.getBytes("UTF-8").length + "\r\n\r\n" + respBody;
                 os.write(resp.getBytes("UTF-8"));
             } else if (path.startsWith("/api/receive")) {
@@ -363,3 +577,4 @@ public class AndroidBridge {
         return true;
     }
 }
+
