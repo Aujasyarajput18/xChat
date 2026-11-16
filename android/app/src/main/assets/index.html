@@ -955,6 +955,84 @@
         .scanner-corner.tr { top: 14px; right: 14px; border-width: 3px 3px 0 0; border-top-right-radius: 8px; }
         .scanner-corner.bl { bottom: 14px; left: 14px; border-width: 0 0 3px 3px; border-bottom-left-radius: 8px; }
         .scanner-corner.br { bottom: 14px; right: 14px; border-width: 0 3px 3px 0; border-bottom-right-radius: 8px; }
+
+        /* Nearby Radar Carousel */
+        .radar-strip {
+            padding: 10px 16px 12px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .radar-strip-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .radar-strip-title {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .radar-carousel-row {
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding: 4px 2px 4px;
+            scrollbar-width: none;
+            -webkit-overflow-scrolling: touch;
+        }
+        .radar-carousel-row::-webkit-scrollbar {
+            display: none;
+        }
+        .radar-peer-bubble {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+            width: 68px;
+            text-align: center;
+            transition: transform 0.15s ease;
+        }
+        .radar-peer-bubble:hover {
+            transform: translateY(-2px);
+        }
+        .radar-peer-avatar {
+            position: relative;
+            width: 48px;
+            height: 48px;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 18px;
+            color: #1e1338;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+        .radar-peer-name {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-primary);
+            max-width: 68px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .radar-peer-ip {
+            font-size: 9.5px;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--text-muted);
+            max-width: 68px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         .btn-action {
             padding: 9px 18px;
             border-radius: 9999px;
@@ -1394,6 +1472,20 @@
                     <div class="search-pill-box">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                         <input type="text" class="search-input-field" id="searchFilter" placeholder="Search contacts or sockets..." oninput="filterContacts()">
+                    </div>
+                </div>
+
+                <!-- Nearby Mesh Radar Carousel -->
+                <div class="radar-strip" id="radarStrip">
+                    <div class="radar-strip-header">
+                        <span class="radar-strip-title">
+                            <span class="pulse-dot" style="width:6px; height:6px;"></span>
+                            Nearby Mesh Radar
+                        </span>
+                        <span id="radarCountBadge" style="font-size:10px; color:var(--pastel-mint); font-family:'JetBrains Mono',monospace;">0 online</span>
+                    </div>
+                    <div class="radar-carousel-row" id="radarPeersRow">
+                        <div style="font-size:11px; color:var(--text-muted); padding:6px 2px;">Scanning Wi-Fi / hotspot radio...</div>
                     </div>
                 </div>
 
@@ -2128,10 +2220,107 @@
                 selectContact(contacts[0]);
             }
 
+            fetchDiscoveredPeers();
+            setInterval(fetchDiscoveredPeers, 3000);
+
             if (!isNative) {
                 setInterval(pollServerMessages, 1500);
             }
         }
+
+        let lastDiscoveredPeers = [];
+
+        async function fetchDiscoveredPeers() {
+            let peers = [];
+            if (isNative && window.AndroidBridge && window.AndroidBridge.getDiscoveredPeers) {
+                try {
+                    const raw = window.AndroidBridge.getDiscoveredPeers();
+                    peers = JSON.parse(raw || '[]');
+                } catch(e) {}
+            } else {
+                try {
+                    const res = await fetch(API_BASE + '/api/discovered');
+                    if (res.ok) {
+                        peers = await res.json();
+                    }
+                } catch(e) {}
+            }
+
+            lastDiscoveredPeers = peers;
+            renderNearbyRadar(peers);
+        }
+
+        function renderNearbyRadar(peers) {
+            const countBadge = document.getElementById('radarCountBadge');
+            const row = document.getElementById('radarPeersRow');
+            if (!row) return;
+
+            if (countBadge) {
+                countBadge.innerText = `${peers.length} online`;
+                countBadge.style.color = peers.length > 0 ? 'var(--status-green)' : 'var(--pastel-mint)';
+            }
+
+            if (peers.length === 0) {
+                row.innerHTML = `<div style="font-size:11px; color:var(--text-muted); padding:6px 2px;">Scanning Wi-Fi / hotspot radio for peers...</div>`;
+                return;
+            }
+
+            row.innerHTML = '';
+            peers.forEach((p, idx) => {
+                const bubble = document.createElement('div');
+                bubble.className = 'radar-peer-bubble';
+                const bg = AVATAR_PALETTE[idx % AVATAR_PALETTE.length];
+                const initial = (p.display_name || p.username || 'P').replace('@', '').charAt(0).toUpperCase();
+                const u = p.username || '@peer';
+                const sock = `${p.ip}:${p.port}`;
+
+                bubble.onclick = () => connectToDiscoveredPeer(p);
+
+                bubble.innerHTML = `
+                    <div class="radar-peer-avatar" style="background: ${bg}">
+                        ${initial}
+                        <div class="online-dot-badge" style="width:10px; height:10px; border-width:2px;"></div>
+                    </div>
+                    <div class="radar-peer-name">${escapeHtml(u)}</div>
+                    <div class="radar-peer-ip">${escapeHtml(sock)}</div>
+                `;
+                row.appendChild(bubble);
+            });
+        }
+
+        function connectToDiscoveredPeer(peer) {
+            const u = peer.username || '@peer';
+            const sock = `${peer.ip}:${peer.port}`;
+
+            let contact = contacts.find(c => c.alias === u || c.target === sock);
+            if (!contact) {
+                contact = {
+                    alias: u,
+                    target: sock,
+                    fingerprint: peer.fingerprint || '',
+                    address: peer.address || '',
+                    status: 'Nearby Wi-Fi Mesh',
+                    last_message: 'Connected via Nearby Mesh Radar',
+                    last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                };
+                contacts.push(contact);
+            } else {
+                contact.target = sock;
+                contact.status = 'Nearby Wi-Fi Mesh';
+            }
+
+            Storage.set('contacts', JSON.stringify(contacts));
+            renderContacts();
+            selectContact(contact);
+
+            if (window.AndroidBridge && window.AndroidBridge.vibrate) {
+                window.AndroidBridge.vibrate(20);
+            }
+        }
+
+        window.onNearbyPeersUpdated = function() {
+            fetchDiscoveredPeers();
+        };
 
         function renderContacts(filtered = null) {
             const listEl = document.getElementById('contactList');
