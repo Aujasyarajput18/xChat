@@ -121,5 +121,6 @@ jobs:
             **/*.tar.gz
             **/*.zip
             **/*.sha256
+            **/*.apk
           draft: false
           prerelease: false
