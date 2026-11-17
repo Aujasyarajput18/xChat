@@ -5,37 +5,32 @@
 -- Author: Aujasya Rajput
 -- Course: Advanced Programming / Database Management Systems
 -- Target: CP2 (dbms/03_schema.sql)
--- Standard: Compatible with SQLite 3.35+ and PostgreSQL 14+
+-- Standard: PostgreSQL 14+
 -- Normalization Form: Strictly Boyce-Codd Normal Form (BCNF) Compliant
 -- ============================================================================
 
--- Enable foreign key constraint validation in SQLite engines
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-PRAGMA busy_timeout = 5000;
-
 -- ----------------------------------------------------------------------------
--- 1. DROP EXISTING RELATIONS (Reverse Topological Dependency Order)
+-- 1. SCHEMA SETUP & DROP EXISTING RELATIONS (Reverse Topological Order)
 -- ----------------------------------------------------------------------------
-DROP TABLE IF EXISTS relay_cache;
-DROP TABLE IF EXISTS outbox_queue;
-DROP TABLE IF EXISTS skipped_keys;
-DROP TABLE IF EXISTS ratchet_sessions;
-DROP TABLE IF EXISTS messages;
-DROP TABLE IF EXISTS conversations;
-DROP TABLE IF EXISTS contacts;
-DROP TABLE IF EXISTS prekey_bundles;
-DROP TABLE IF EXISTS identity_keys;
-DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS relay_cache        CASCADE;
+DROP TABLE IF EXISTS outbox_queue       CASCADE;
+DROP TABLE IF EXISTS skipped_keys       CASCADE;
+DROP TABLE IF EXISTS ratchet_sessions   CASCADE;
+DROP TABLE IF EXISTS messages           CASCADE;
+DROP TABLE IF EXISTS conversations      CASCADE;
+DROP TABLE IF EXISTS contacts           CASCADE;
+DROP TABLE IF EXISTS prekey_bundles     CASCADE;
+DROP TABLE IF EXISTS identity_keys      CASCADE;
+DROP TABLE IF EXISTS users              CASCADE;
 
 -- ----------------------------------------------------------------------------
 -- 2. RELATION: users (Root Node Identity) [BCNF]
 -- ----------------------------------------------------------------------------
 CREATE TABLE users (
     user_id             TEXT PRIMARY KEY,
-    username            TEXT NOT NULL COLLATE NOCASE,
+    username            TEXT NOT NULL,
     master_fingerprint  TEXT NOT NULL UNIQUE,
-    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ----------------------------------------------------------------------------
@@ -46,9 +41,9 @@ CREATE TABLE identity_keys (
     user_id             TEXT NOT NULL,
     key_type            TEXT NOT NULL CHECK (key_type IN ('ED25519_SIGNING', 'X25519_DH')),
     public_key          TEXT NOT NULL UNIQUE,
-    encrypted_privkey   BLOB NOT NULL,
-    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_identity_user 
+    encrypted_privkey   BYTEA NOT NULL,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_identity_user
         FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
 );
 
@@ -62,11 +57,11 @@ CREATE TABLE prekey_bundles (
     key_type            TEXT NOT NULL CHECK (key_type IN ('SIGNED_PREKEY', 'ONE_TIME_PREKEY')),
     public_key          TEXT NOT NULL UNIQUE,
     signature           TEXT,
-    is_consumed         BOOLEAN NOT NULL DEFAULT 0 CHECK (is_consumed IN (0, 1)),
-    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_prekey_user 
+    is_consumed         BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_prekey_user
         FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    CONSTRAINT uq_user_prekey_seq 
+    CONSTRAINT uq_user_prekey_seq
         UNIQUE (user_id, key_id_num, key_type)
 );
 
@@ -76,18 +71,18 @@ CREATE TABLE prekey_bundles (
 CREATE TABLE contacts (
     contact_id          TEXT PRIMARY KEY,
     user_id             TEXT NOT NULL,
-    peer_address        TEXT NOT NULL COLLATE NOCASE,
+    peer_address        TEXT NOT NULL,
     peer_name           TEXT NOT NULL,
     reachable_socket    TEXT NOT NULL,
     public_key          TEXT NOT NULL,
     fingerprint         TEXT NOT NULL,
-    trust_status        TEXT NOT NULL DEFAULT 'UNVERIFIED' 
+    trust_status        TEXT NOT NULL DEFAULT 'UNVERIFIED'
                         CHECK (trust_status IN ('VERIFIED', 'UNVERIFIED', 'BLOCKED')),
-    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_contact_user 
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_contact_user
         FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    CONSTRAINT uq_user_peer_address 
+    CONSTRAINT uq_user_peer_address
         UNIQUE (user_id, peer_address)
 );
 
@@ -98,15 +93,15 @@ CREATE TABLE conversations (
     conversation_id     TEXT PRIMARY KEY,
     user_id             TEXT NOT NULL,
     contact_id          TEXT NOT NULL,
-    conv_type           TEXT NOT NULL DEFAULT 'DIRECT' 
+    conv_type           TEXT NOT NULL DEFAULT 'DIRECT'
                         CHECK (conv_type IN ('DIRECT', 'BURNER', 'SOS_BEACON')),
     title               TEXT NOT NULL,
-    is_muted            BOOLEAN NOT NULL DEFAULT 0 CHECK (is_muted IN (0, 1)),
-    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_active_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_conversation_user 
+    is_muted            BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_active_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_conversation_user
         FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
-    CONSTRAINT fk_conversation_contact 
+    CONSTRAINT fk_conversation_contact
         FOREIGN KEY (contact_id) REFERENCES contacts(contact_id) ON DELETE RESTRICT
 );
 
@@ -118,14 +113,14 @@ CREATE TABLE messages (
     conversation_id     TEXT NOT NULL,
     sender_address      TEXT NOT NULL,
     recipient_address   TEXT NOT NULL,
-    ciphertext          BLOB NOT NULL,
+    ciphertext          BYTEA NOT NULL,
     nonce               TEXT NOT NULL,
     ratchet_counter     INTEGER NOT NULL DEFAULT 0 CHECK (ratchet_counter >= 0),
-    delivery_status     TEXT NOT NULL DEFAULT 'PENDING' 
+    delivery_status     TEXT NOT NULL DEFAULT 'PENDING'
                         CHECK (delivery_status IN ('PENDING', 'SENT', 'DELIVERED', 'READ', 'FAILED')),
-    sent_at             DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    delivered_at        DATETIME,
-    CONSTRAINT fk_message_conversation 
+    sent_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    delivered_at        TIMESTAMP,
+    CONSTRAINT fk_message_conversation
         FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
 );
 
@@ -142,8 +137,8 @@ CREATE TABLE ratchet_sessions (
     recv_chain_key_hash TEXT NOT NULL,
     send_counter        INTEGER NOT NULL DEFAULT 0 CHECK (send_counter >= 0),
     recv_counter        INTEGER NOT NULL DEFAULT 0 CHECK (recv_counter >= 0),
-    last_ratchet_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_ratchet_conversation 
+    last_ratchet_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_ratchet_conversation
         FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
 );
 
@@ -155,9 +150,9 @@ CREATE TABLE skipped_keys (
     dh_ratchet_pub      TEXT NOT NULL,
     message_counter     INTEGER NOT NULL CHECK (message_counter >= 0),
     message_key         TEXT NOT NULL,
-    expires_at          DATETIME NOT NULL,
+    expires_at          TIMESTAMP NOT NULL,
     PRIMARY KEY (session_id, dh_ratchet_pub, message_counter),
-    CONSTRAINT fk_skipped_session 
+    CONSTRAINT fk_skipped_session
         FOREIGN KEY (session_id) REFERENCES ratchet_sessions(session_id) ON DELETE CASCADE
 );
 
@@ -168,17 +163,18 @@ CREATE TABLE outbox_queue (
     envelope_id         TEXT PRIMARY KEY,
     conversation_id     TEXT NOT NULL,
     destination_address TEXT NOT NULL,
-    transport_type      TEXT NOT NULL 
+    transport_type      TEXT NOT NULL
                         CHECK (transport_type IN ('TCP_LAN', 'BLE_MESH', 'SPHINX_MIXNET', 'SMS_MODEM')),
-    raw_payload         BLOB NOT NULL,
-    retry_count         INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0 AND retry_count <= max_retries),
+    raw_payload         BYTEA NOT NULL,
+    retry_count         INTEGER NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
     max_retries         INTEGER NOT NULL DEFAULT 5 CHECK (max_retries >= 0),
-    next_retry_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    status              TEXT NOT NULL DEFAULT 'QUEUED' 
+    next_retry_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status              TEXT NOT NULL DEFAULT 'QUEUED'
                         CHECK (status IN ('QUEUED', 'IN_FLIGHT', 'ACKNOWLEDGED', 'DEAD_LETTER')),
-    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_outbox_conversation 
-        FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
+    created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_outbox_conversation
+        FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    CONSTRAINT chk_retry_within_limit CHECK (retry_count <= max_retries)
 );
 
 -- ----------------------------------------------------------------------------
@@ -186,11 +182,11 @@ CREATE TABLE outbox_queue (
 -- ----------------------------------------------------------------------------
 CREATE TABLE relay_cache (
     route_token         TEXT PRIMARY KEY,
-    opaque_envelope     BLOB NOT NULL,
+    opaque_envelope     BYTEA NOT NULL,
     hop_count           INTEGER NOT NULL DEFAULT 1 CHECK (hop_count >= 1 AND hop_count <= 16),
     ttl_seconds         INTEGER NOT NULL DEFAULT 3600 CHECK (ttl_seconds >= 0),
-    received_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expires_at          DATETIME NOT NULL,
+    received_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at          TIMESTAMP NOT NULL,
     CONSTRAINT chk_relay_ttl_order CHECK (expires_at >= received_at)
 );
 
@@ -199,91 +195,112 @@ CREATE TABLE relay_cache (
 -- ============================================================================
 
 -- Fast lookup of user identity keys
-CREATE INDEX idx_identity_keys_user 
+CREATE INDEX idx_identity_keys_user
     ON identity_keys(user_id);
 
 -- Rapid filtration of active vs consumed prekeys during X3DH negotiation
-CREATE INDEX idx_prekeys_user_consumed 
+CREATE INDEX idx_prekeys_user_consumed
     ON prekey_bundles(user_id, is_consumed);
 
 -- O(1) sender verification by address during packet ingress
-CREATE INDEX idx_contacts_user_peer 
+CREATE INDEX idx_contacts_user_peer
     ON contacts(user_id, peer_address);
 
 -- Active conversation list sorted by recent activity timestamp
-CREATE INDEX idx_conversations_user_active 
+CREATE INDEX idx_conversations_user_active
     ON conversations(user_id, last_active_at DESC);
 
 -- Conversation lookup by contact ID
-CREATE INDEX idx_conversations_contact 
+CREATE INDEX idx_conversations_contact
     ON conversations(contact_id);
 
 -- Compound covering index for message feed cursor pagination and thread retrieval
-CREATE INDEX idx_messages_conversation_sent_at 
+CREATE INDEX idx_messages_conversation_sent_at
     ON messages(conversation_id, sent_at DESC);
 
 -- Rapid filtration for aggregate unread message count badges
-CREATE INDEX idx_messages_delivery_status 
+CREATE INDEX idx_messages_delivery_status
     ON messages(delivery_status);
 
 -- Double Ratchet cryptographic session state point lookup
-CREATE INDEX idx_ratchet_sessions_conversation 
+CREATE INDEX idx_ratchet_sessions_conversation
     ON ratchet_sessions(conversation_id);
 
 -- Fast lookup and pruning of expired skipped ratchet keys
-CREATE INDEX idx_skipped_keys_lookup 
+CREATE INDEX idx_skipped_keys_lookup
     ON skipped_keys(session_id, expires_at);
 
 -- Multi-carrier outbox dispatcher priority queue
-CREATE INDEX idx_outbox_queue_priority 
+CREATE INDEX idx_outbox_queue_priority
     ON outbox_queue(status, next_retry_at);
 
 -- Outbox envelope tracking by conversation thread
-CREATE INDEX idx_outbox_queue_conversation 
+CREATE INDEX idx_outbox_queue_conversation
     ON outbox_queue(conversation_id);
 
 -- High-speed automated mesh garbage collection scan
-CREATE INDEX idx_relay_cache_ttl 
+CREATE INDEX idx_relay_cache_ttl
     ON relay_cache(expires_at);
 
 -- ============================================================================
--- 13. ACTIVE AUDIT & SYNCHRONIZATION TRIGGERS
+-- 13. ACTIVE AUDIT & SYNCHRONIZATION TRIGGERS (PostgreSQL Syntax)
 -- ============================================================================
 
 -- Trigger 1: Automatically sync conversation last_active_at on new message insertion
-CREATE TRIGGER trg_messages_update_conversation_last_active
-AFTER INSERT ON messages
-FOR EACH ROW
+CREATE OR REPLACE FUNCTION fn_update_conversation_last_active()
+RETURNS TRIGGER AS $$
 BEGIN
     UPDATE conversations
     SET last_active_at = NEW.sent_at
     WHERE conversation_id = NEW.conversation_id;
+    RETURN NEW;
 END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_messages_update_conversation_last_active
+AFTER INSERT ON messages
+FOR EACH ROW
+EXECUTE FUNCTION fn_update_conversation_last_active();
 
 -- Trigger 2: Automatically update contacts updated_at timestamp when socket changes
-CREATE TRIGGER trg_contacts_update_timestamp
-AFTER UPDATE OF reachable_socket, trust_status ON contacts
-FOR EACH ROW
+CREATE OR REPLACE FUNCTION fn_update_contact_timestamp()
+RETURNS TRIGGER AS $$
 BEGIN
-    UPDATE contacts
-    SET updated_at = CURRENT_TIMESTAMP
-    WHERE contact_id = NEW.contact_id;
+    IF NEW.reachable_socket IS DISTINCT FROM OLD.reachable_socket
+       OR NEW.trust_status IS DISTINCT FROM OLD.trust_status THEN
+        NEW.updated_at := CURRENT_TIMESTAMP;
+    END IF;
+    RETURN NEW;
 END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_contacts_update_timestamp
+BEFORE UPDATE ON contacts
+FOR EACH ROW
+EXECUTE FUNCTION fn_update_contact_timestamp();
 
 -- Trigger 3: Automatically record ratchet session transition timestamps on counter increment
-CREATE TRIGGER trg_ratchet_session_update_timestamp
-AFTER UPDATE OF send_counter, recv_counter, peer_dh_ratchet_pub ON ratchet_sessions
-FOR EACH ROW
+CREATE OR REPLACE FUNCTION fn_update_ratchet_timestamp()
+RETURNS TRIGGER AS $$
 BEGIN
-    UPDATE ratchet_sessions
-    SET last_ratchet_at = CURRENT_TIMESTAMP
-    WHERE session_id = NEW.session_id;
+    IF NEW.send_counter IS DISTINCT FROM OLD.send_counter
+       OR NEW.recv_counter IS DISTINCT FROM OLD.recv_counter
+       OR NEW.peer_dh_ratchet_pub IS DISTINCT FROM OLD.peer_dh_ratchet_pub THEN
+        NEW.last_ratchet_at := CURRENT_TIMESTAMP;
+    END IF;
+    RETURN NEW;
 END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_ratchet_session_update_timestamp
+BEFORE UPDATE ON ratchet_sessions
+FOR EACH ROW
+EXECUTE FUNCTION fn_update_ratchet_timestamp();
 
 -- ============================================================================
 -- 14. SEED VERIFICATION TRANSACTIONS (Integrity & Constraint Validation)
 -- ============================================================================
-BEGIN TRANSACTION;
+BEGIN;
 
 -- Insert primary local node
 INSERT INTO users (user_id, username, master_fingerprint)
@@ -291,11 +308,11 @@ VALUES ('usr_01', 'Alice_LocalNode', 'E4B8C1D2A3F4E5A6B7C8D9E0F1A2B3C4D5E6F7A8B9
 
 -- Insert identity signing key
 INSERT INTO identity_keys (key_id, user_id, key_type, public_key, encrypted_privkey)
-VALUES ('key_01', 'usr_01', 'ED25519_SIGNING', 'ed25519_pub_alice_master_key_hash', X'DEADBEEFCAFE1234');
+VALUES ('key_01', 'usr_01', 'ED25519_SIGNING', 'ed25519_pub_alice_master_key_hash', '\xDEADBEEFCAFE1234');
 
 -- Insert prekey bundle
 INSERT INTO prekey_bundles (prekey_id, user_id, key_id_num, key_type, public_key, signature, is_consumed)
-VALUES ('pre_01', 'usr_01', 1, 'SIGNED_PREKEY', 'x25519_pub_alice_prekey_01', 'sig_alice_01', 0);
+VALUES ('pre_01', 'usr_01', 1, 'SIGNED_PREKEY', 'x25519_pub_alice_prekey_01', 'sig_alice_01', FALSE);
 
 -- Insert remote contact
 INSERT INTO contacts (contact_id, user_id, peer_address, peer_name, reachable_socket, public_key, fingerprint, trust_status)
@@ -311,14 +328,14 @@ VALUES ('ses_01', 'conv_01', 'bob_dh_pub_01', 'alice_dh_pub_01', 'sha256_root_kd
 
 -- Insert verified message record
 INSERT INTO messages (message_id, conversation_id, sender_address, recipient_address, ciphertext, nonce, ratchet_counter, delivery_status)
-VALUES ('msg_01', 'conv_01', 'xchat://bob.p2p', 'usr_01', X'414C49434520534543555245205041594C4F4144', 'nonce_12byte_hex', 0, 'DELIVERED');
+VALUES ('msg_01', 'conv_01', 'xchat://bob.p2p', 'usr_01', '\x414C49434520534543555245205041594C4F4144', 'nonce_12byte_hex', 0, 'DELIVERED');
 
 -- Insert outbox envelope queued for BLE mesh dispatch
 INSERT INTO outbox_queue (envelope_id, conversation_id, destination_address, transport_type, raw_payload, status)
-VALUES ('env_01', 'conv_01', 'xchat://bob.p2p', 'BLE_MESH', X'7843686174576972654672616D65', 'QUEUED');
+VALUES ('env_01', 'conv_01', 'xchat://bob.p2p', 'BLE_MESH', '\x7843686174576972654672616D65', 'QUEUED');
 
 -- Insert blind relay packet
 INSERT INTO relay_cache (route_token, opaque_envelope, hop_count, ttl_seconds, expires_at)
-VALUES ('token_mesh_hop_01', X'4F50415155455F4D4553485F454E56454C4F5045', 2, 3600, datetime('now', '+3600 seconds'));
+VALUES ('token_mesh_hop_01', '\x4F50415155455F4D4553485F454E56454C4F5045', 2, 3600, CURRENT_TIMESTAMP + INTERVAL '3600 seconds');
 
 COMMIT;
