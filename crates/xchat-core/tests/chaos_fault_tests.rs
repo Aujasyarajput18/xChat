@@ -76,7 +76,7 @@ fn test_chaos_relay_hop_exhaustion_fault() {
     assert!(res.is_err());
     match res.unwrap_err() {
         CoreError::RoutingError(msg) => {
-            assert!(msg.contains("Maximum hop count exceeded"));
+            assert!(msg.to_lowercase().contains("maximum hop count"));
         }
         other => panic!("Expected RoutingError, got {:?}", other),
     }

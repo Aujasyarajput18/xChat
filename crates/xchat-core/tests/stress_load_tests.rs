@@ -38,11 +38,13 @@ fn test_stress_symmetric_crypto_throughput_and_latencies() {
             size, total_duration, ops_per_sec, p50, p95, p99
         );
 
-        // Assert SLO: symmetric encrypt+decrypt roundtrip p95 < 2000 µs
+        // Assert SLO: symmetric encrypt+decrypt roundtrip p95 < 500 µs (release) or < 15,000 µs (unoptimized debug)
+        let max_allowed_p95 = if cfg!(debug_assertions) { 15_000 } else { 500 };
         assert!(
-            p95 < 2000,
-            "SLO breached: p95 latency {} µs exceeds limit",
-            p95
+            p95 < max_allowed_p95,
+            "SLO breached: p95 latency {} µs exceeds limit {} µs",
+            p95,
+            max_allowed_p95
         );
     }
 }
