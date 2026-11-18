@@ -208,6 +208,31 @@ impl DoubleRatchet {
         }
         Ok(())
     }
+
+    /// Explicitly clear and securely zeroize all skipped message keys.
+    pub fn clear_skipped_keys(&mut self) {
+        for (_, mut key) in self.skipped_message_keys.drain() {
+            key.zeroize();
+        }
+    }
+
+    /// Return the count of skipped message keys awaiting out-of-order packets.
+    pub fn skipped_keys_count(&self) -> usize {
+        self.skipped_message_keys.len()
+    }
+}
+
+impl Drop for DoubleRatchet {
+    fn drop(&mut self) {
+        self.clear_skipped_keys();
+        self.rk.zeroize();
+        if let Some(mut cks) = self.cks {
+            cks.zeroize();
+        }
+        if let Some(mut ckr) = self.ckr {
+            ckr.zeroize();
+        }
+    }
 }
 
 #[cfg(test)]

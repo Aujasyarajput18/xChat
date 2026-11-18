@@ -1,9 +1,11 @@
 use std::collections::VecDeque;
 
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use xchat_crypto::{
-    aead::{decrypt_aead, derive_nonce, encrypt_aead},
+    aead::{decrypt_aead, encrypt_aead},
+    errors::CryptoError,
     kdf::derive_discovery_token,
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -62,6 +64,7 @@ impl BurnerRoom {
     }
 
     /// Post a message to the burner room. Returns an envelope ready for broadcast over mesh.
+    /// Uses a random 12-byte nonce per message prepended to ciphertext to guarantee nonce uniqueness.
     pub fn post_message(
         &mut self,
         sender_alias: &str,
@@ -80,9 +83,14 @@ impl BurnerRoom {
         let header = RoutingHeader::new(self.routing_token, now, self.ttl_seconds);
         let aad = header.to_aad();
 
-        let nonce = derive_nonce(now, true);
+        let mut nonce = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce);
         let ciphertext =
             encrypt_aead(&self.room_key, &nonce, &serialized, &aad).map_err(CoreError::Crypto)?;
+
+        let mut full_payload = Vec::with_capacity(12 + ciphertext.len());
+        full_payload.extend_from_slice(&nonce);
+        full_payload.extend_from_slice(&ciphertext);
 
         self.messages.push_back(msg);
 
@@ -90,7 +98,7 @@ impl BurnerRoom {
             header,
             ratchet_header: None,
             x3dh_init: None,
-            ciphertext,
+            ciphertext: full_payload,
         })
     }
 
@@ -113,10 +121,17 @@ impl BurnerRoom {
             });
         }
 
+        if envelope.ciphertext.len() < 12 {
+            return Err(CoreError::Crypto(CryptoError::DecryptionFailed));
+        }
+
+        let mut nonce = [0u8; 12];
+        nonce.copy_from_slice(&envelope.ciphertext[..12]);
+        let ciphertext = &envelope.ciphertext[12..];
+
         let aad = envelope.header.to_aad();
-        let nonce = derive_nonce(envelope.header.created_at, true);
-        let decrypted = decrypt_aead(&self.room_key, &nonce, &envelope.ciphertext, &aad)
-            .map_err(CoreError::Crypto)?;
+        let decrypted =
+            decrypt_aead(&self.room_key, &nonce, ciphertext, &aad).map_err(CoreError::Crypto)?;
 
         let msg: BurnerMessage = bincode::deserialize(&decrypted)
             .map_err(|e| CoreError::Serialization(e.to_string()))?;
@@ -163,5 +178,25 @@ mod tests {
         // Expire message
         room_bob.prune_expired(now + 65);
         assert_eq!(room_bob.get_messages().len(), 0);
+    }
+
+    #[test]
+    fn test_burner_same_second_nonces_unique() {
+        let mut room = BurnerRoom::new("recon-team-alpha", "passphrase", 60);
+        let now = 1000;
+
+        // Post two messages in the same second
+        let env1 = room.post_message("Alice", "Message 1", now).unwrap();
+        let env2 = room.post_message("Alice", "Message 2", now).unwrap();
+
+        // Nonces are in the first 12 bytes of ciphertext and must NOT match
+        assert_ne!(&env1.ciphertext[..12], &env2.ciphertext[..12]);
+
+        // Both messages must decrypt cleanly
+        let mut receiver = BurnerRoom::new("recon-team-alpha", "passphrase", 60);
+        let msg1 = receiver.receive_envelope(&env1, now).unwrap();
+        let msg2 = receiver.receive_envelope(&env2, now).unwrap();
+        assert_eq!(msg1.content, "Message 1");
+        assert_eq!(msg2.content, "Message 2");
     }
 }

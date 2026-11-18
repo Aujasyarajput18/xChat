@@ -1,5 +1,13 @@
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use rand::{rngs::OsRng, RngCore};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+type HmacSha256 = Hmac<Sha256>;
+
+const PIN_ITERATIONS: u32 = 25_000;
+const STORAGE_KEY_ITERATIONS: u32 = 10_000;
 
 /// Mode unlocked by user authentication.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -9,38 +17,65 @@ pub enum VaultMode {
     Invalid,
 }
 
-/// Duress and Decoy PIN authenticator.
+/// Duress and Decoy PIN authenticator with constant-time verification and PBKDF2-style key stretching.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct DuressVaultManager {
+    salt: [u8; 16],
     primary_pin_hash: [u8; 32],
     decoy_pin_hash: [u8; 32],
 }
 
 impl DuressVaultManager {
+    /// Create a new DuressVaultManager with a freshly generated random salt.
     pub fn new(primary_pin: &str, decoy_pin: &str) -> Self {
         assert_ne!(
             primary_pin, decoy_pin,
             "Primary and Decoy PIN must be different"
         );
+        let mut salt = [0u8; 16];
+        OsRng.fill_bytes(&mut salt);
+        Self::with_salt(primary_pin, decoy_pin, salt)
+    }
+
+    /// Create or restore a DuressVaultManager with an existing salt.
+    pub fn with_salt(primary_pin: &str, decoy_pin: &str, salt: [u8; 16]) -> Self {
+        assert_ne!(
+            primary_pin, decoy_pin,
+            "Primary and Decoy PIN must be different"
+        );
         Self {
-            primary_pin_hash: Self::hash_pin(primary_pin),
-            decoy_pin_hash: Self::hash_pin(decoy_pin),
+            salt,
+            primary_pin_hash: Self::hash_pin(primary_pin, &salt),
+            decoy_pin_hash: Self::hash_pin(decoy_pin, &salt),
         }
     }
 
-    fn hash_pin(pin: &str) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(b"xchat-pin-salt-v1");
-        hasher.update(pin.as_bytes());
-        hasher.finalize().into()
+    pub fn salt(&self) -> &[u8; 16] {
+        &self.salt
     }
 
-    /// Authenticate a user-provided PIN.
+    fn hash_pin(pin: &str, salt: &[u8; 16]) -> [u8; 32] {
+        let mut mac =
+            HmacSha256::new_from_slice(pin.as_bytes()).expect("HMAC key length infallible");
+        mac.update(b"xchat-pin-auth-v2");
+        mac.update(salt);
+        let mut block: [u8; 32] = mac.finalize().into_bytes().into();
+
+        for _ in 0..PIN_ITERATIONS {
+            let mut m =
+                HmacSha256::new_from_slice(pin.as_bytes()).expect("HMAC key length infallible");
+            m.update(&block);
+            block = m.finalize().into_bytes().into();
+        }
+        block
+    }
+
+    /// Authenticate a user-provided PIN using constant-time comparison.
     pub fn authenticate(&self, input_pin: &str) -> VaultMode {
-        let input_hash = Self::hash_pin(input_pin);
-        if input_hash == self.primary_pin_hash {
+        let input_hash = Self::hash_pin(input_pin, &self.salt);
+        if bool::from(input_hash.ct_eq(&self.primary_pin_hash)) {
             VaultMode::Real
-        } else if input_hash == self.decoy_pin_hash {
+        } else if bool::from(input_hash.ct_eq(&self.decoy_pin_hash)) {
             VaultMode::Decoy
         } else {
             VaultMode::Invalid
@@ -53,14 +88,24 @@ impl DuressVaultManager {
             return None;
         }
 
-        let mut hasher = Sha256::new();
-        hasher.update(input_pin.as_bytes());
+        let mut mac =
+            HmacSha256::new_from_slice(input_pin.as_bytes()).expect("HMAC key length infallible");
+        mac.update(&self.salt);
         match mode {
-            VaultMode::Real => hasher.update(b"xchat-real-storage-key"),
-            VaultMode::Decoy => hasher.update(b"xchat-decoy-storage-key"),
+            VaultMode::Real => mac.update(b"xchat-real-storage-key-v2"),
+            VaultMode::Decoy => mac.update(b"xchat-decoy-storage-key-v2"),
             VaultMode::Invalid => unreachable!(),
         }
-        Some(hasher.finalize().into())
+        let mut key: [u8; 32] = mac.finalize().into_bytes().into();
+
+        for _ in 0..STORAGE_KEY_ITERATIONS {
+            let mut m = HmacSha256::new_from_slice(input_pin.as_bytes())
+                .expect("HMAC key length infallible");
+            m.update(&key);
+            key = m.finalize().into_bytes().into();
+        }
+
+        Some(key)
     }
 }
 

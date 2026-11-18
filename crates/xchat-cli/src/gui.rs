@@ -106,7 +106,7 @@ async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Res
 
 /// Start the embedded Telegram-styled app server with UDP peer discovery.
 pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
-    let bind_addr = format!("0.0.0.0:{}", port);
+    let bind_addr = format!("127.0.0.1:{}", port);
     let listener = TcpListener::bind(&bind_addr).await?;
     let local_ip = detect_local_ip();
 
@@ -260,7 +260,10 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 String::new()
             };
 
-            let cors_headers = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n";
+            let cors_headers = format!(
+                "Access-Control-Allow-Origin: http://localhost:{}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n",
+                port
+            );
 
             if method == "OPTIONS" {
                 let resp = format!(
@@ -276,16 +279,17 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     let st = state_clone.lock().unwrap();
                     (st.profile.username.clone(), st.profile.display_name.clone())
                 };
-                let json = format!(
-                    r#"{{"address":"{}","fingerprint":"{}","visual_fingerprint":"{}","username":"{}","display_name":"{}","ip":"{}","port":{},"status":"online"}}"#,
-                    my_addr_clone,
-                    my_fp_clone,
-                    visual_fp_clone,
-                    username,
-                    display_name,
-                    local_ip_clone,
-                    port
-                );
+                let json = serde_json::to_string(&serde_json::json!({
+                    "address": my_addr_clone,
+                    "fingerprint": my_fp_clone,
+                    "visual_fingerprint": visual_fp_clone,
+                    "username": username,
+                    "display_name": display_name,
+                    "ip": local_ip_clone,
+                    "port": port,
+                    "status": "online"
+                }))
+                .unwrap_or_else(|_| "{}".to_string());
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     cors_headers,
@@ -300,18 +304,18 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     let invite = st.profile.generate_invite_url(&sock);
                     (st.profile.clone(), sock, invite)
                 };
-                let json = format!(
-                    r#"{{"username":"{}","display_name":"{}","bio":"{}","avatar_color":"{}","address":"{}","fingerprint":"{}","visual_fingerprint":"{}","reachable":"{}","invite_url":"{}"}}"#,
-                    profile.username,
-                    profile.display_name,
-                    profile.bio,
-                    profile.avatar_color,
-                    profile.address,
-                    profile.fingerprint,
-                    visual_fp_clone,
-                    reachable,
-                    invite_url
-                );
+                let json = serde_json::to_string(&serde_json::json!({
+                    "username": profile.username,
+                    "display_name": profile.display_name,
+                    "bio": profile.bio,
+                    "avatar_color": profile.avatar_color,
+                    "address": profile.address,
+                    "fingerprint": profile.fingerprint,
+                    "visual_fingerprint": visual_fp_clone,
+                    "reachable": reachable,
+                    "invite_url": invite_url
+                }))
+                .unwrap_or_else(|_| "{}".to_string());
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     cors_headers,
@@ -457,10 +461,13 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
 
                     if let Some(target) = target_opt {
                         if !target.is_empty() {
-                            let out_body = format!(
-                                r#"{{"sender":"{}","alias":"{}","text":"{}","time":"{}"}}"#,
-                                my_addr_clone, my_handle, req.text, now_str
-                            );
+                            let out_body = serde_json::to_string(&serde_json::json!({
+                                "sender": my_addr_clone,
+                                "alias": my_handle,
+                                "text": req.text,
+                                "time": now_str
+                            }))
+                            .unwrap_or_default();
                             let _ = dispatch_http_post(&target, "/api/receive", &out_body).await;
                         }
                     }

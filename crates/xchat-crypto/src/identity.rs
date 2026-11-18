@@ -2,17 +2,27 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
 
 use crate::{errors::CryptoError, kdf::derive_discovery_token};
 
 /// Long-term cryptographic identity keypair for an xChat device.
 /// Combines an Ed25519 identity key for digital signatures with an X25519 key for Diffie-Hellman.
-#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct IdentityKeyPair {
-    #[zeroize(skip)]
     pub signing_key: SigningKey,
     pub dh_secret: StaticSecret,
+}
+
+impl Zeroize for IdentityKeyPair {
+    fn zeroize(&mut self) {
+        self.signing_key = SigningKey::from_bytes(&[0u8; 32]);
+    }
+}
+
+impl Drop for IdentityKeyPair {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 /// Public component of a device's cryptographic identity.

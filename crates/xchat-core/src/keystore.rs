@@ -5,9 +5,10 @@ use std::{
     path::Path,
 };
 
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use xchat_crypto::{
-    aead::{decrypt_aead, derive_nonce, encrypt_aead},
+    aead::{decrypt_aead, encrypt_aead},
     identity::IdentityKeyPair,
     x3dh::{OneTimePrekeyPair, PrekeyBundle, SignedPrekeyPair},
 };
@@ -70,7 +71,26 @@ impl KeyStore {
             .insert(bundle.identity_key.sign_pubkey, bundle);
     }
 
+    /// Consume a one-time prekey by public key, removing it from storage to enforce single-use forward secrecy.
+    pub fn consume_one_time_prekey(&mut self, pubkey: &[u8; 32]) -> Option<OneTimePrekeyPair> {
+        if let Some(pos) = self
+            .one_time_prekeys
+            .iter()
+            .position(|opk| opk.pubkey == *pubkey)
+        {
+            Some(self.one_time_prekeys.remove(pos))
+        } else {
+            None
+        }
+    }
+
+    /// Rotate the signed prekey using the device identity key.
+    pub fn rotate_signed_prekey(&mut self) {
+        self.signed_prekey = SignedPrekeyPair::generate(&self.identity);
+    }
+
     /// Save keystore to disk encrypted under a passphrase-derived key.
+    /// A fresh random 12-byte nonce is generated for every save and prepended to the file.
     pub fn save_encrypted(&self, path: &Path, encryption_key: &[u8; 32]) -> Result<(), CoreError> {
         let (sign_seed, dh_secret) = self.identity.to_bytes();
 
@@ -91,29 +111,44 @@ impl KeyStore {
 
         let serialized =
             bincode::serialize(&stored).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        let nonce = derive_nonce(0xcafe, true);
+        let mut nonce = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce);
         let ciphertext = encrypt_aead(encryption_key, &nonce, &serialized, b"xchat-keystore-v1")
             .map_err(CoreError::Crypto)?;
+
+        let mut output = Vec::with_capacity(12 + ciphertext.len());
+        output.extend_from_slice(&nonce);
+        output.extend_from_slice(&ciphertext);
 
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| CoreError::StorageError(e.to_string()))?;
         }
 
         let mut file = File::create(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        file.write_all(&ciphertext)
+        file.write_all(&output)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
         Ok(())
     }
 
     /// Load encrypted keystore from disk.
+    /// Extracts the 12-byte random nonce from the beginning of the file.
     pub fn load_encrypted(path: &Path, encryption_key: &[u8; 32]) -> Result<Self, CoreError> {
         let mut file = File::open(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        let mut ciphertext = Vec::new();
-        file.read_to_end(&mut ciphertext)
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
 
-        let nonce = derive_nonce(0xcafe, true);
-        let decrypted = decrypt_aead(encryption_key, &nonce, &ciphertext, b"xchat-keystore-v1")
+        if data.len() < 12 {
+            return Err(CoreError::StorageError(
+                "Keystore file corrupted or too short".into(),
+            ));
+        }
+
+        let mut nonce = [0u8; 12];
+        nonce.copy_from_slice(&data[..12]);
+        let ciphertext = &data[12..];
+
+        let decrypted = decrypt_aead(encryption_key, &nonce, ciphertext, b"xchat-keystore-v1")
             .map_err(CoreError::Crypto)?;
 
         let mut stored: StoredKeyData =
@@ -169,5 +204,43 @@ mod tests {
         let loaded = KeyStore::load_encrypted(path, &key).expect("load succeeds");
         assert_eq!(loaded.identity.public_key().address(), orig_addr);
         assert_eq!(loaded.one_time_prekeys.len(), 10);
+    }
+
+    #[test]
+    fn test_keystore_random_nonce_uniqueness() {
+        let temp_file1 = NamedTempFile::new().unwrap();
+        let temp_file2 = NamedTempFile::new().unwrap();
+        let key = [0x77u8; 32];
+
+        let original = KeyStore::generate();
+        original
+            .save_encrypted(temp_file1.path(), &key)
+            .expect("save 1");
+        original
+            .save_encrypted(temp_file2.path(), &key)
+            .expect("save 2");
+
+        let data1 = fs::read(temp_file1.path()).unwrap();
+        let data2 = fs::read(temp_file2.path()).unwrap();
+
+        // Nonce must not repeat: first 12 bytes must differ
+        assert_ne!(&data1[..12], &data2[..12]);
+        // Ciphertext must differ due to fresh nonce
+        assert_ne!(data1, data2);
+    }
+
+    #[test]
+    fn test_consume_one_time_prekey() {
+        let mut ks = KeyStore::generate();
+        assert_eq!(ks.one_time_prekeys.len(), 10);
+        let target_pubkey = ks.one_time_prekeys[0].pubkey;
+
+        let consumed = ks.consume_one_time_prekey(&target_pubkey);
+        assert!(consumed.is_some());
+        assert_eq!(consumed.unwrap().pubkey, target_pubkey);
+        assert_eq!(ks.one_time_prekeys.len(), 9);
+
+        // Cannot consume again
+        assert!(ks.consume_one_time_prekey(&target_pubkey).is_none());
     }
 }
