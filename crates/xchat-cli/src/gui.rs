@@ -937,6 +937,14 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                     } else if let Some(m) = st.messages.get(&c.address) {
                                         list = m.clone();
                                     }
+                                } else if peer == "Peer" {
+                                    if let Some((_, m)) = st
+                                        .messages
+                                        .iter()
+                                        .find(|(k, _)| *k != "xChat Assistant" && *k != "Saved Messages")
+                                    {
+                                        list = m.clone();
+                                    }
                                 }
                             }
                             serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())

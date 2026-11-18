@@ -41,6 +41,7 @@ if [[ "$ID1" != *"\"port\":$PORT1"* ]]; then
     echo "[-] FAILED: Node 1 identity invalid"
     exit 1
 fi
+U1=$(echo "$ID1" | sed -n 's/.*"username":"\([^"]*\)".*/\1/p')
 
 # 2. Verify Node 2 Identity
 echo "[*] Step 2: Testing Node 2 API identity endpoint..."
@@ -50,11 +51,12 @@ if [[ "$ID2" != *"\"port\":$PORT2"* ]]; then
     echo "[-] FAILED: Node 2 identity invalid"
     exit 1
 fi
+U2=$(echo "$ID2" | sed -n 's/.*"username":"\([^"]*\)".*/\1/p')
 
 # 3. Verify Telegram HTML UI Served
 echo "[*] Step 3: Verifying Telegram UI embedded HTML is served..."
 HTML=$(curl -s "http://127.0.0.1:$PORT1/")
-if [[ "$HTML" != *"--tg-bg: #0e1621;"* ]] || [[ "$HTML" != *"Direct P2P"* ]]; then
+if [[ "$HTML" != *"--pastel-lavender"* ]] || [[ "$HTML" != *"Direct P2P"* ]]; then
     echo "[-] FAILED: Telegram UI HTML not served correctly"
     exit 1
 fi
@@ -78,6 +80,9 @@ sleep 1
 # 6. Verify Node 2 received message
 echo "[*] Step 6: Verifying Node 2 received inbound message across network..."
 MSGS2=$(curl -s "http://127.0.0.1:$PORT2/api/messages?peer=Peer")
+if [[ "$MSGS2" != *"$TEST_MSG"* ]] && [ -n "$U1" ]; then
+    MSGS2=$(curl -s "http://127.0.0.1:$PORT2/api/messages?peer=$U1")
+fi
 echo "    Node 2 Inbox: $MSGS2"
 if [[ "$MSGS2" != *"$TEST_MSG"* ]]; then
     echo "[-] FAILED: Node 2 did not receive message"
