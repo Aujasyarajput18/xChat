@@ -2603,7 +2603,7 @@
             }
 
             if (peers.length === 0) {
-                row.innerHTML = `<div style="font-size:11px; color:var(--text-muted); padding:6px 2px;">Scanning Wi-Fi / hotspot radio for peers...</div>`;
+                row.innerHTML = `<div style="font-size:11px; color:var(--text-muted); padding:6px 2px;">Scanning BLE Mesh & Wi-Fi radios for peers...</div>`;
                 return;
             }
 
@@ -2614,17 +2614,19 @@
                 const bg = AVATAR_PALETTE[idx % AVATAR_PALETTE.length];
                 const initial = (p.display_name || p.username || 'P').replace('@', '').charAt(0).toUpperCase();
                 const u = p.username || '@peer';
-                const sock = `${p.ip}:${p.port}`;
+                const isBle = p.transport === 'ble' || (p.address && p.address.startsWith('ble:'));
+                const sock = isBle ? (p.ip || p.address) : `${p.ip}:${p.port}`;
+                const badgeLabel = isBle ? 'BLE' : 'Wi-Fi';
 
                 bubble.onclick = () => connectToDiscoveredPeer(p);
 
                 bubble.innerHTML = `
-                    <div class="radar-peer-avatar" style="background: ${bg}">
+                    <div class="radar-peer-avatar" style="background: ${bg}; position: relative;">
                         ${initial}
-                        <div class="online-dot-badge" style="width:10px; height:10px; border-width:2px;"></div>
+                        <div class="online-dot-badge" style="width:10px; height:10px; border-width:2px; background: ${isBle ? 'var(--pastel-lavender)' : 'var(--status-green)'};"></div>
                     </div>
                     <div class="radar-peer-name">${escapeHtml(u)}</div>
-                    <div class="radar-peer-ip">${escapeHtml(sock)}</div>
+                    <div class="radar-peer-ip"><span style="font-size:9px; font-weight:700; color:${isBle ? 'var(--pastel-lavender)' : 'var(--pastel-mint)'}; margin-right:2px;">[${badgeLabel}]</span>${escapeHtml(sock)}</div>
                 `;
                 row.appendChild(bubble);
             });
@@ -2632,7 +2634,9 @@
 
         function connectToDiscoveredPeer(peer) {
             const u = peer.username || '@peer';
-            const sock = `${peer.ip}:${peer.port}`;
+            const isBle = peer.transport === 'ble' || (peer.address && peer.address.startsWith('ble:'));
+            const sock = isBle ? (peer.address || peer.ip) : `${peer.ip}:${peer.port}`;
+            const statusLabel = isBle ? 'Physical BLE Mesh' : 'Nearby Wi-Fi Mesh';
 
             let contact = contacts.find(c => c.alias === u || c.target === sock);
             if (!contact) {
@@ -2641,14 +2645,14 @@
                     target: sock,
                     fingerprint: peer.fingerprint || '',
                     address: peer.address || '',
-                    status: 'Nearby Wi-Fi Mesh',
-                    last_message: 'Connected via Nearby Mesh Radar',
+                    status: statusLabel,
+                    last_message: `Connected via ${statusLabel}`,
                     last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 };
                 contacts.push(contact);
             } else {
                 contact.target = sock;
-                contact.status = 'Nearby Wi-Fi Mesh';
+                contact.status = statusLabel;
             }
 
             Storage.set('contacts', JSON.stringify(contacts));
@@ -2931,8 +2935,11 @@
                 time: timeStr
             });
 
-            if (isNative && window.AndroidBridge.sendHttpEnvelope) {
-                if (activeContact.target && activeContact.target !== 'local') {
+            if (isNative) {
+                if (activeContact.target && activeContact.target.startsWith('ble:') && window.AndroidBridge.sendBleEnvelope) {
+                    const targetMac = activeContact.target.replace('ble:', '');
+                    window.AndroidBridge.sendBleEnvelope(targetMac, payload, 'send_' + Date.now());
+                } else if (activeContact.target && activeContact.target !== 'local' && window.AndroidBridge.sendHttpEnvelope) {
                     window.AndroidBridge.sendHttpEnvelope(activeContact.target, payload, 'send_' + Date.now());
                 }
             } else {

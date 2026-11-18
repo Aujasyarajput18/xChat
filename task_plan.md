@@ -87,3 +87,23 @@ Build, test, verify, and document a production-grade, full-fledged implementatio
 - [x] Visual Safety Verification using 6-symbol emoji fingerprint blocks
 - [x] Multi-node automated verification test suite (`scripts/test-username-discovery.sh`)
 - [x] Release packaging automation and GitHub release asset upload (v0.1.0)
+
+### Phase 11: Real Physical Bluetooth Low Energy (BLE) Mesh & P2P Transport (Zero Simulation)
+- [x] Implement Rust BLE Packetization, MTU Chunking & Reassembly Protocol (`crates/xchat-transport/src/ble.rs`)
+- [x] Add unit & stress tests for BLE MTU fragmentation (20B to 512B MTUs) with out-of-order reassembly
+- [x] Implement native Android `BluetoothMeshManager.java`:
+  - `BluetoothLeAdvertiser`: Real physical advertising of xChat 128-bit Service UUID & Identity Service Data
+  - `BluetoothLeScanner`: Real low-latency hardware scanning for nearby mesh nodes with RSSI tracking
+  - `BluetoothGattServer`: Real incoming GATT server with RX/TX/INFO characteristics and chunk reassembly
+  - `BluetoothGatt` Client: Outbound GATT connection pool, MTU 512 negotiation, sequential chunk dispatch
+- [x] Integrate `BluetoothMeshManager` into `AndroidBridge.java`:
+  - Lifecycle initialization, Bluetooth permission checks, graceful degradation
+  - Inbound BLE envelope dispatch into WebView via `onIncomingNetworkMessage`
+  - JavaScript interfaces: `sendBleEnvelope()`, `isBleSupported()`, `isBleAdvertising()`, `isBleScanning()`, `restartBleMesh()`
+- [x] Update UI (`index.html`):
+  - Support `ble:XX:XX:XX:XX:XX:XX` peer targets
+  - Nearby Radar shows BLE Bluetooth signal indicator vs Wi-Fi
+  - Message dispatch automatically routes via `window.AndroidBridge.sendBleEnvelope` for BLE peers
+- [x] Verify Rust tests (`cargo test --workspace`) (All 65 tests passed)
+- [x] Rebuild, align, and sign Android APK (`dist/xchat-v0.1.0.apk` & `dist/xchat.apk`)
+- [x] Commit and push to `origin/main` and `backup/main`

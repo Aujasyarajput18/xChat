@@ -15,3 +15,7 @@
    - Outbox queue buffers messages and dispatches them across whichever transport is currently active.
 4. **Relay Blindness**:
    - Relay nodes inspect only `RoutingHeader` (destination token, TTL, message ID) and never access message payload or identity keys.
+5. **Physical Bluetooth LE Mesh Transport Architecture (Zero Simulation)**:
+   - **MTU Fragmentation**: Standard BLE ATT MTU is 23 bytes (20 payload bytes). High-speed negotiated MTU reaches 512 bytes. A framing protocol header (`[0x58, 0x43, msg_id: u16, chunk_idx: u16, total_chunks: u16]`) chunks arbitrary encrypted envelopes into physical BLE packets.
+   - **Dual Role Operation**: Devices simultaneously operate as a BLE Peripheral (advertising service UUID `a495ff10-c5b1-4b44-b512-1370f02d74de` and hosting GATT server for ingress) and a BLE Central (scanning for nearby mesh beacons and connecting via GATT client for egress).
+   - **Zero Internet Requirement**: Completely bypasses cellular towers, internet routers, and Wi-Fi access points. Transmits raw encrypted envelopes directly device-to-device via 2.4 GHz Bluetooth hardware.

@@ -39,6 +39,9 @@ public class AndroidBridge {
     private int listenPort = 9400;
     private volatile boolean isServerRunning = false;
 
+    // Physical Bluetooth Low Energy Mesh
+    private BluetoothMeshManager bleManager;
+
     // UDP Peer Discovery
     private static final int DISCOVERY_PORT = 9444;
     private DatagramSocket udpSocket;
@@ -121,6 +124,8 @@ public class AndroidBridge {
         public String ip;
         public int port;
         public long lastSeen;
+        public String transport = "wifi";
+        public int rssi = 0;
 
         public JSONObject toJson() {
             try {
@@ -131,6 +136,8 @@ public class AndroidBridge {
                 obj.put("fingerprint", fingerprint);
                 obj.put("ip", ip);
                 obj.put("port", port);
+                obj.put("transport", transport);
+                obj.put("rssi", rssi);
                 obj.put("last_seen", lastSeen);
                 return obj;
             } catch (Exception e) {
@@ -152,11 +159,17 @@ public class AndroidBridge {
 
         startReceiverServer();
         startDiscoveryEngine();
+        bleManager = new BluetoothMeshManager(activity, this);
     }
 
     public void cleanup() {
         isServerRunning = false;
         isDiscoveryRunning = false;
+        if (bleManager != null) {
+            try {
+                bleManager.cleanup();
+            } catch (Exception ignored) {}
+        }
         if (serverSocket != null) {
             try {
                 serverSocket.close();
@@ -475,6 +488,94 @@ public class AndroidBridge {
     @JavascriptInterface
     public int getListenPort() {
         return listenPort;
+    }
+
+    @JavascriptInterface
+    public void sendBleEnvelope(final String targetMac, final String jsonPayload, final String callbackId) {
+        if (bleManager == null || !bleManager.isSupported()) {
+            activity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    String js = "if(window.onSendCallback) window.onSendCallback(" + JSONObject.quote(callbackId) + ", false);";
+                    activity.getWebView().evaluateJavascript(js, null);
+                }
+            });
+            return;
+        }
+
+        bleManager.sendEnvelope(targetMac, jsonPayload, new BluetoothMeshManager.BleSendCallback() {
+            @Override
+            public void onResult(final boolean success, final String error) {
+                activity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        String js = "if(window.onSendCallback) window.onSendCallback(" + JSONObject.quote(callbackId) + ", " + success + ");";
+                        activity.getWebView().evaluateJavascript(js, null);
+                    }
+                });
+            }
+        });
+    }
+
+    public void onBlePeerDiscovered(BluetoothMeshManager.DiscoveredBleNode node) {
+        DiscoveredPeerInfo peer = new DiscoveredPeerInfo();
+        peer.username = (node.username != null && !node.username.isEmpty()) ? node.username : "@ble_" + node.macAddress.replace(":", "").substring(6);
+        peer.displayName = (node.deviceName != null && !node.deviceName.isEmpty()) ? node.deviceName : "BLE Peer (" + node.macAddress + ")";
+        peer.address = "ble:" + node.macAddress;
+        peer.fingerprint = "ble:" + node.macAddress;
+        peer.ip = "ble:" + node.macAddress;
+        peer.port = 0;
+        peer.transport = "ble";
+        peer.rssi = node.rssi;
+        peer.lastSeen = node.lastSeen;
+
+        discoveredPeers.put(peer.address, peer);
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String js = "if (window.onNearbyPeersUpdated) { window.onNearbyPeersUpdated(); }";
+                    activity.getWebView().evaluateJavascript(js, null);
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    public void handleInboundBleEnvelope(final String payload, final String senderMac) {
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                vibrate(30);
+                try {
+                    String js = "if (window.onIncomingNetworkMessage) { window.onIncomingNetworkMessage(" + JSONObject.quote(payload) + "); }";
+                    activity.getWebView().evaluateJavascript(js, null);
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public boolean isBleSupported() {
+        return bleManager != null && bleManager.isSupported();
+    }
+
+    @JavascriptInterface
+    public boolean isBleAdvertising() {
+        return bleManager != null && bleManager.isAdvertising();
+    }
+
+    @JavascriptInterface
+    public boolean isBleScanning() {
+        return bleManager != null && bleManager.isScanning();
+    }
+
+    @JavascriptInterface
+    public void restartBleMesh() {
+        if (bleManager != null) {
+            bleManager.cleanup();
+            bleManager = new BluetoothMeshManager(activity, this);
+        }
     }
 
     @JavascriptInterface
