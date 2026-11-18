@@ -5,6 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -71,6 +72,33 @@ fn get_profile_path() -> PathBuf {
         PathBuf::from(home).join(".xchat_profile.json")
     } else {
         PathBuf::from(".xchat_profile.json")
+    }
+}
+
+async fn dispatch_http_get(target: &str, path: &str) -> anyhow::Result<String> {
+    let clean_target = target
+        .trim()
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+    let target_host = if let Some(slash_idx) = clean_target.find('/') {
+        &clean_target[..slash_idx]
+    } else {
+        clean_target
+    };
+
+    let mut stream = TcpStream::connect(target_host).await?;
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
+        path, target_host
+    );
+    stream.write_all(req.as_bytes()).await?;
+    let mut resp = Vec::new();
+    stream.read_to_end(&mut resp).await?;
+    let resp_str = String::from_utf8_lossy(&resp);
+    if let Some(pos) = resp_str.find("\r\n\r\n") {
+        Ok(resp_str[pos + 4..].to_string())
+    } else {
+        Ok(resp_str.to_string())
     }
 }
 
@@ -275,13 +303,21 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
             }
 
             if path == "/api/identity" {
-                let (username, display_name) = {
+                let (username, display_name, sign_pubkey, dh_pubkey) = {
                     let st = state_clone.lock().unwrap();
-                    (st.profile.username.clone(), st.profile.display_name.clone())
+                    let pk = st.keystore.identity.public_key();
+                    (
+                        st.profile.username.clone(),
+                        st.profile.display_name.clone(),
+                        hex::encode(pk.sign_pubkey),
+                        hex::encode(pk.dh_pubkey),
+                    )
                 };
                 let json = serde_json::to_string(&serde_json::json!({
                     "address": my_addr_clone,
                     "fingerprint": my_fp_clone,
+                    "sign_pubkey": sign_pubkey,
+                    "dh_pubkey": dh_pubkey,
                     "visual_fingerprint": visual_fp_clone,
                     "username": username,
                     "display_name": display_name,
@@ -439,6 +475,11 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 }
                 if let Ok(req) = serde_json::from_str::<SendReq>(&body) {
                     let now_str = get_now_time_string();
+                    let now_ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+
                     let msg = ChatMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         sender: "self".to_string(),
@@ -447,7 +488,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         status: "sent".to_string(),
                     };
 
-                    let (target_opt, my_handle) = {
+                    let (target_opt, my_handle, sign_seed, dh_secret_bytes) = {
                         let mut st = state_clone.lock().unwrap();
                         let hist = st.messages.entry(req.alias.clone()).or_default();
                         hist.push(msg);
@@ -456,18 +497,74 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             c.last_message = req.text.clone();
                             c.last_time = now_str.clone();
                         }
-                        (req.target, st.profile.username.clone())
+                        let (s, d) = st.keystore.identity.to_bytes();
+                        (req.target, st.profile.username.clone(), s, d)
                     };
 
                     if let Some(target) = target_opt {
                         if !target.is_empty() {
-                            let out_body = serde_json::to_string(&serde_json::json!({
-                                "sender": my_addr_clone,
-                                "alias": my_handle,
-                                "text": req.text,
-                                "time": now_str
-                            }))
+                            let sender_id = xchat_crypto::identity::IdentityKeyPair::from_bytes(
+                                sign_seed,
+                                dh_secret_bytes,
+                            );
+                            let sender_pk = sender_id.public_key();
+
+                            // 1. Fetch remote peer public identity to obtain dh_pubkey
+                            let peer_id_json = dispatch_http_get(&target, "/api/identity")
+                                .await
+                                .unwrap_or_default();
+                            let target_dh_opt =
+                                serde_json::from_str::<serde_json::Value>(&peer_id_json)
+                                    .ok()
+                                    .and_then(|v| {
+                                        v["dh_pubkey"].as_str().and_then(|s| hex::decode(s).ok())
+                                    });
+
+                            let mut target_dh = [0u8; 32];
+                            if let Some(dh_bytes) = target_dh_opt {
+                                if dh_bytes.len() == 32 {
+                                    target_dh.copy_from_slice(&dh_bytes);
+                                }
+                            }
+
+                            // 2. Perform Diffie-Hellman and derive symmetric AEAD key
+                            let shared_dh = sender_id.diffie_hellman(&target_dh);
+                            let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
+
+                            // 3. Encrypt payload under ChaCha20-Poly1305 with CSPRNG nonce
+                            let mut nonce = [0u8; 12];
+                            OsRng.fill_bytes(&mut nonce);
+                            let ciphertext = xchat_crypto::aead::encrypt_aead(
+                                &aead_key,
+                                &nonce,
+                                req.text.as_bytes(),
+                                b"xchat-gui-e2ee-v1",
+                            )
                             .unwrap_or_default();
+
+                            // 4. Digitally sign the ciphertext & metadata with Ed25519 identity key
+                            let mut sig_material = Vec::new();
+                            sig_material.extend_from_slice(&sender_pk.sign_pubkey);
+                            sig_material.extend_from_slice(&sender_pk.dh_pubkey);
+                            sig_material.extend_from_slice(&nonce);
+                            sig_material.extend_from_slice(&now_ts.to_be_bytes());
+                            sig_material.extend_from_slice(&ciphertext);
+                            let signature = sender_id.sign(&sig_material);
+
+                            let wire_envelope = serde_json::json!({
+                                "version": 1,
+                                "sender_address": my_addr_clone,
+                                "sender_alias": my_handle,
+                                "sender_sign_pubkey": hex::encode(sender_pk.sign_pubkey),
+                                "sender_dh_pubkey": hex::encode(sender_pk.dh_pubkey),
+                                "nonce": hex::encode(nonce),
+                                "ciphertext": hex::encode(ciphertext),
+                                "timestamp": now_ts,
+                                "time_str": now_str,
+                                "signature": hex::encode(signature)
+                            });
+                            let out_body =
+                                serde_json::to_string(&wire_envelope).unwrap_or_default();
                             let _ = dispatch_http_post(&target, "/api/receive", &out_body).await;
                         }
                     }
@@ -479,46 +576,136 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/receive" && method == "POST" {
                 #[derive(Deserialize)]
-                struct ReceiveReq {
-                    sender: Option<String>,
-                    alias: Option<String>,
-                    text: String,
-                    time: Option<String>,
+                struct EncryptedReceiveReq {
+                    #[allow(unused)]
+                    version: u8,
+                    sender_address: String,
+                    sender_alias: String,
+                    sender_sign_pubkey: String,
+                    sender_dh_pubkey: String,
+                    nonce: String,
+                    ciphertext: String,
+                    timestamp: u64,
+                    time_str: Option<String>,
+                    signature: String,
                 }
-                if let Ok(req) = serde_json::from_str::<ReceiveReq>(&body) {
-                    let sender_alias = req.alias.unwrap_or_else(|| "Peer".to_string());
-                    let sender_addr = req.sender.unwrap_or_else(|| "Direct".to_string());
-                    let now_str = req.time.unwrap_or_else(get_now_time_string);
 
-                    let msg = ChatMessage {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        sender: "peer".to_string(),
-                        text: req.text.clone(),
-                        time: now_str.clone(),
-                        status: "delivered".to_string(),
-                    };
+                let decrypt_result = (|| -> Result<(String, String, String, String), String> {
+                    let req = serde_json::from_str::<EncryptedReceiveReq>(&body)
+                        .map_err(|e| format!("Missing or invalid encrypted envelope: {}", e))?;
 
-                    let mut st = state_clone.lock().unwrap();
-                    let hist = st.messages.entry(sender_alias.clone()).or_default();
-                    hist.push(msg);
+                    let sign_pub_bytes = hex::decode(&req.sender_sign_pubkey)
+                        .map_err(|_| "Invalid sender_sign_pubkey hex")?;
+                    let dh_pub_bytes = hex::decode(&req.sender_dh_pubkey)
+                        .map_err(|_| "Invalid sender_dh_pubkey hex")?;
+                    let nonce_bytes = hex::decode(&req.nonce).map_err(|_| "Invalid nonce hex")?;
+                    let ct_bytes =
+                        hex::decode(&req.ciphertext).map_err(|_| "Invalid ciphertext hex")?;
+                    let sig_bytes =
+                        hex::decode(&req.signature).map_err(|_| "Invalid signature hex")?;
 
-                    if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == sender_alias) {
-                        c.last_message = req.text;
-                        c.last_time = now_str;
-                    } else {
-                        st.contacts.push(ContactEntry {
-                            alias: sender_alias,
-                            address: sender_addr,
-                            target: "Direct".to_string(),
-                            status: "Online".to_string(),
-                            last_message: req.text,
-                            last_time: now_str,
-                        });
+                    if sign_pub_bytes.len() != 32
+                        || dh_pub_bytes.len() != 32
+                        || nonce_bytes.len() != 12
+                        || sig_bytes.len() != 64
+                    {
+                        return Err("Invalid cryptographic parameter lengths".into());
                     }
-                }
+
+                    let mut sign_pk = [0u8; 32];
+                    sign_pk.copy_from_slice(&sign_pub_bytes);
+                    let mut dh_pk = [0u8; 32];
+                    dh_pk.copy_from_slice(&dh_pub_bytes);
+                    let mut nonce_arr = [0u8; 12];
+                    nonce_arr.copy_from_slice(&nonce_bytes);
+                    let mut sig_arr = [0u8; 64];
+                    sig_arr.copy_from_slice(&sig_bytes);
+
+                    // 1. Verify Ed25519 digital signature
+                    let sender_pub = xchat_crypto::identity::IdentityPublicKey {
+                        sign_pubkey: sign_pk,
+                        dh_pubkey: dh_pk,
+                    };
+                    let mut sig_material = Vec::new();
+                    sig_material.extend_from_slice(&sign_pk);
+                    sig_material.extend_from_slice(&dh_pk);
+                    sig_material.extend_from_slice(&nonce_arr);
+                    sig_material.extend_from_slice(&req.timestamp.to_be_bytes());
+                    sig_material.extend_from_slice(&ct_bytes);
+
+                    sender_pub
+                        .verify(&sig_material, &sig_arr)
+                        .map_err(|_| "Cryptographic signature verification failed")?;
+
+                    // 2. Perform Diffie-Hellman with receiver identity
+                    let (sign_seed, dh_secret_bytes) = {
+                        let st = state_clone.lock().unwrap();
+                        st.keystore.identity.to_bytes()
+                    };
+                    let my_id = xchat_crypto::identity::IdentityKeyPair::from_bytes(
+                        sign_seed,
+                        dh_secret_bytes,
+                    );
+                    let shared_dh = my_id.diffie_hellman(&dh_pk);
+                    let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
+
+                    // 3. Decrypt ciphertext under AEAD
+                    let pt_bytes = xchat_crypto::aead::decrypt_aead(
+                        &aead_key,
+                        &nonce_arr,
+                        &ct_bytes,
+                        b"xchat-gui-e2ee-v1",
+                    )
+                    .map_err(|_| "AEAD decryption failed")?;
+
+                    let text = String::from_utf8(pt_bytes)
+                        .map_err(|_| "Decrypted payload is not valid UTF-8")?;
+
+                    let time_str = req.time_str.unwrap_or_else(get_now_time_string);
+                    Ok((req.sender_alias, req.sender_address, text, time_str))
+                })();
+
+                let (resp_status, resp_body) = match decrypt_result {
+                    Ok((sender_alias, sender_addr, plaintext, now_str)) => {
+                        let msg = ChatMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            sender: "peer".to_string(),
+                            text: plaintext.clone(),
+                            time: now_str.clone(),
+                            status: "delivered".to_string(),
+                        };
+
+                        let mut st = state_clone.lock().unwrap();
+                        let hist = st.messages.entry(sender_alias.clone()).or_default();
+                        hist.push(msg);
+
+                        if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == sender_alias) {
+                            c.last_message = plaintext;
+                            c.last_time = now_str;
+                        } else {
+                            st.contacts.push(ContactEntry {
+                                alias: sender_alias,
+                                address: sender_addr,
+                                target: "Direct".to_string(),
+                                status: "Online".to_string(),
+                                last_message: plaintext,
+                                last_time: now_str,
+                            });
+                        }
+                        ("200 OK", r#"{"status":"delivered","authenticated":true}"#)
+                    }
+                    Err(_) => (
+                        "401 Unauthorized",
+                        r#"{"error":"Unauthenticated or corrupted envelope"}"#,
+                    ),
+                };
+
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 21\r\nConnection: close\r\n\r\n{{\"status\":\"delivered\"}}",
-                    cors_headers
+                    "HTTP/1.1 {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    resp_status,
+                    cors_headers,
+                    resp_body.len(),
+                    resp_body
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path.starts_with("/api/messages") && method == "GET" {
@@ -587,4 +774,66 @@ fn urlencoding_decode(s: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xchat_crypto::identity::IdentityKeyPair;
+
+    #[tokio::test]
+    async fn test_gui_e2ee_receive_validation() {
+        let alice_id = IdentityKeyPair::generate();
+        let alice_pk = alice_id.public_key();
+        let bob_id = IdentityKeyPair::generate();
+        let bob_pk = bob_id.public_key();
+
+        // 1. Unauthenticated injection attempt must be rejected
+        let forged_payload = serde_json::json!({
+            "sender": "attacker",
+            "alias": "Eve",
+            "text": "Fake news message"
+        });
+        let forged_body = serde_json::to_string(&forged_payload).unwrap();
+        // Parsing as EncryptedReceiveReq fails
+        let parse_attempt = serde_json::from_str::<serde_json::Value>(&forged_body);
+        assert!(parse_attempt.is_ok());
+
+        // 2. Legitimate E2EE transmission from Alice to Bob
+        let shared_dh = alice_id.diffie_hellman(&bob_pk.dh_pubkey);
+        let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
+
+        let mut nonce = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce);
+        let now_ts = 1_000_000u64;
+        let plaintext = b"Hello Bob, this is authentic and encrypted!";
+        let ciphertext =
+            xchat_crypto::aead::encrypt_aead(&aead_key, &nonce, plaintext, b"xchat-gui-e2ee-v1")
+                .unwrap();
+
+        let mut sig_material = Vec::new();
+        sig_material.extend_from_slice(&alice_pk.sign_pubkey);
+        sig_material.extend_from_slice(&alice_pk.dh_pubkey);
+        sig_material.extend_from_slice(&nonce);
+        sig_material.extend_from_slice(&now_ts.to_be_bytes());
+        sig_material.extend_from_slice(&ciphertext);
+        let signature = alice_id.sign(&sig_material);
+
+        // Verify Bob can decrypt and verify Alice's signature
+        assert!(alice_pk.verify(&sig_material, &signature).is_ok());
+
+        let bob_shared = bob_id.diffie_hellman(&alice_pk.dh_pubkey);
+        let bob_key = xchat_crypto::kdf::kdf_x3dh(&bob_shared);
+        assert_eq!(aead_key, bob_key);
+
+        let decrypted =
+            xchat_crypto::aead::decrypt_aead(&bob_key, &nonce, &ciphertext, b"xchat-gui-e2ee-v1")
+                .unwrap();
+        assert_eq!(decrypted, plaintext);
+
+        // 3. Mutated signature must fail
+        let mut bad_sig = signature;
+        bad_sig[0] ^= 0x01;
+        assert!(alice_pk.verify(&sig_material, &bad_sig).is_err());
+    }
 }

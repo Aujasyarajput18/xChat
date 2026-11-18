@@ -6,7 +6,7 @@ use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
 use crate::{
-    aead::{decrypt_aead, derive_nonce, encrypt_aead},
+    aead::{decrypt_aead, derive_ratchet_nonce, encrypt_aead},
     errors::CryptoError,
     kdf::{kdf_ck, kdf_rk},
     padding::{pad_message, unpad_message},
@@ -102,7 +102,7 @@ impl DoubleRatchet {
         };
 
         // 3. Derive nonce from message sequence
-        let nonce = derive_nonce(self.ns as u64, true);
+        let nonce = derive_ratchet_nonce(self.ns as u64);
         self.ns += 1;
 
         // 4. Pad payload and build combined AAD (associated_data + serialized header)
@@ -131,7 +131,7 @@ impl DoubleRatchet {
         // Check if message key was previously skipped (e.g. arrived out-of-order)
         let key_lookup = (header.dh_pubkey, header.n);
         if let Some(mut message_key) = self.skipped_message_keys.remove(&key_lookup) {
-            let nonce = derive_nonce(header.n as u64, true);
+            let nonce = derive_ratchet_nonce(header.n as u64);
             let decrypted = decrypt_aead(&message_key, &nonce, ciphertext, &full_aad)?;
             message_key.zeroize();
             return unpad_message(&decrypted);
@@ -154,7 +154,7 @@ impl DoubleRatchet {
         self.ckr = Some(next_ckr);
         self.nr += 1;
 
-        let nonce = derive_nonce(header.n as u64, true);
+        let nonce = derive_ratchet_nonce(header.n as u64);
         let decrypted = decrypt_aead(&message_key, &nonce, ciphertext, &full_aad)?;
         message_key.zeroize();
 

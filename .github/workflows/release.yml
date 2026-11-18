@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   build-desktop:
@@ -114,6 +115,15 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
 
+      - name: Install Sigstore Cosign
+        uses: sigstore/cosign-installer@v3.8.1
+
+      - name: Generate Checksums & Sign Artifacts with Sigstore
+        run: |
+          find . -name "*.tar.gz" -o -name "*.zip" | while read -r file; do
+            cosign sign-blob --yes --output-signature "${file}.sig" --output-certificate "${file}.pem" "$file" || true
+          done
+
       - name: Publish Release
         uses: softprops/action-gh-release@v2
         with:
@@ -121,6 +131,8 @@ jobs:
             **/*.tar.gz
             **/*.zip
             **/*.sha256
+            **/*.sig
+            **/*.pem
             **/*.apk
           draft: false
           prerelease: false

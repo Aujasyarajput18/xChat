@@ -1,0 +1,44 @@
+name: Security, Quality & Resilience CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-and-test:
+    name: Security Review & Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: 1. Code Formatting Validation
+        run: cargo fmt --check
+
+      - name: 2. Clippy Linter (-D warnings)
+        run: cargo clippy --workspace --tests -- -D warnings
+
+      - name: 3. Core & Cryptographic Unit Tests
+        run: cargo test --workspace
+
+      - name: 4. Fuzzing & Differential Tests (Phase 5 / T6)
+        run: cargo test --test fuzz_and_tamper_tests -- --nocapture
+
+      - name: 5. Concurrency & Race Tests (Phase 6 / T7)
+        run: cargo test --test concurrency_race_tests -- --nocapture
+
+      - name: 6. Chaos & Fault Injection Tests (Phase 8 / T9-T11)
+        run: cargo test --test chaos_fault_tests -- --nocapture
+
+      - name: 7. Mutation Quality Tests (Phase 9 / T14)
+        run: cargo test --test mutation_quality_tests -- --nocapture
+
+      - name: 8. Stress & Load Benchmarking (Phase 7 / T8)
+        run: cargo test --test stress_load_tests --release -- --nocapture

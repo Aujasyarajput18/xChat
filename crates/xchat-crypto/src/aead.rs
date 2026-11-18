@@ -49,13 +49,18 @@ pub fn decrypt_aead(
         .map_err(|_| CryptoError::DecryptionFailed)
 }
 
-/// Deterministically construct a 12-byte nonce from a message counter and direction flag.
-/// Format: [0..4]: direction + padding, [4..12]: 64-bit big-endian counter
-pub fn derive_nonce(counter: u64, is_sender: bool) -> [u8; NONCE_LEN] {
+/// Deterministically construct a 12-byte nonce for Double Ratchet message encryption and decryption.
+/// Uses a fixed domain separation prefix (0x01) and a 64-bit big-endian counter.
+pub fn derive_ratchet_nonce(counter: u64) -> [u8; NONCE_LEN] {
     let mut nonce = [0u8; NONCE_LEN];
-    nonce[0] = if is_sender { 0x01 } else { 0x02 };
+    nonce[0] = 0x01;
     nonce[4..12].copy_from_slice(&counter.to_be_bytes());
     nonce
+}
+
+/// Deterministically construct a 12-byte nonce from a message counter and direction flag.
+pub fn derive_nonce(counter: u64, _is_sender: bool) -> [u8; NONCE_LEN] {
+    derive_ratchet_nonce(counter)
 }
 
 #[cfg(test)]

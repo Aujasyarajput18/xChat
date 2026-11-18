@@ -24,7 +24,7 @@ class LiveAppHandler(http.server.BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', f'http://localhost:{FRONTEND_PORT}')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.send_header('Content-Length', '0')
@@ -37,7 +37,7 @@ class LiveAppHandler(http.server.BaseHTTPRequestHandler):
                     content = f.read()
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Origin', f'http://localhost:{FRONTEND_PORT}')
                 self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
                 self.send_header('Content-Length', str(len(content)))
                 self.end_headers()
@@ -88,7 +88,7 @@ class LiveAppHandler(http.server.BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = resp.read()
                 self.send_response(resp.status)
-                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Origin', f'http://localhost:{FRONTEND_PORT}')
                 for k, v in resp.headers.items():
                     if k.lower() not in ['transfer-encoding', 'content-length', 'access-control-allow-origin']:
                         self.send_header(k, v)
@@ -98,21 +98,21 @@ class LiveAppHandler(http.server.BaseHTTPRequestHandler):
         except urllib.error.HTTPError as he:
             data = he.read()
             self.send_response(he.code)
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Origin', f'http://localhost:{FRONTEND_PORT}')
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
         except Exception as err:
             self.send_response(502)
             self.send_header('Content-Type', 'application/json')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Access-Control-Allow-Origin', f'http://localhost:{FRONTEND_PORT}')
             err_msg = f'{{"error": "Backend offline", "detail": "{err}"}}'.encode()
             self.send_header('Content-Length', str(len(err_msg)))
             self.end_headers()
             self.wfile.write(err_msg)
 
 if __name__ == '__main__':
-    server = http.server.ThreadingHTTPServer(('0.0.0.0', FRONTEND_PORT), LiveAppHandler)
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', FRONTEND_PORT), LiveAppHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
