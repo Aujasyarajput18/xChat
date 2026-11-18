@@ -2462,10 +2462,24 @@
                         const f = window.AndroidBridge.getFingerprint();
                         if (f) myIdentity.fingerprint = f;
                     }
+                    if (window.AndroidBridge.getSignPubkey) {
+                        const sp = window.AndroidBridge.getSignPubkey();
+                        if (sp) myIdentity.signPubkey = sp;
+                    }
+                    if (window.AndroidBridge.getDhPubkey) {
+                        const dp = window.AndroidBridge.getDhPubkey();
+                        if (dp) myIdentity.dhPubkey = dp;
+                    }
+                    if (window.AndroidBridge.getVisualFingerprint) {
+                        const vfp = window.AndroidBridge.getVisualFingerprint();
+                        if (vfp) myIdentity.visualFingerprint = vfp;
+                    }
                     Storage.set('my_username', myIdentity.username);
                     Storage.set('my_display_name', myIdentity.displayName);
                     Storage.set('my_address', myIdentity.address);
                     Storage.set('my_fingerprint', myIdentity.fingerprint);
+                    if (myIdentity.signPubkey) Storage.set('my_sign_pubkey', myIdentity.signPubkey);
+                    if (myIdentity.dhPubkey) Storage.set('my_dh_pubkey', myIdentity.dhPubkey);
                 } catch(e) {}
             } else {
                 try {
@@ -2477,11 +2491,15 @@
                         myIdentity.address = data.address || myIdentity.address;
                         myIdentity.fingerprint = data.fingerprint || myIdentity.fingerprint;
                         myIdentity.visualFingerprint = data.visual_fingerprint || myIdentity.visualFingerprint;
+                        myIdentity.signPubkey = data.sign_pubkey || '';
+                        myIdentity.dhPubkey = data.dh_pubkey || '';
                         myIdentity.reachable = (data.ip || '127.0.0.1') + ':' + (data.port || 8080);
                         Storage.set('my_username', myIdentity.username);
                         Storage.set('my_display_name', myIdentity.displayName);
                         Storage.set('my_address', myIdentity.address);
                         Storage.set('my_fingerprint', myIdentity.fingerprint);
+                        if (myIdentity.signPubkey) Storage.set('my_sign_pubkey', myIdentity.signPubkey);
+                        if (myIdentity.dhPubkey) Storage.set('my_dh_pubkey', myIdentity.dhPubkey);
                     }
                 } catch(e) {}
 
@@ -2931,7 +2949,7 @@
             try {
                 const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
                 const senderAlias = data.sender_alias || data.alias || data.sender || 'Peer';
-                const text = data.text || data.message || '';
+                const text = data.text || data.message || (data.ciphertext ? '[Encrypted Message]' : '');
                 const timeStr = data.time_str || data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
                 if (!text) return;
@@ -3429,16 +3447,32 @@
             alert(`✅ Successfully paired with ${existing.alias} via Air-Gap QR!\nSocket: ${existing.target}\nForward-secrecy channel ready.`);
         }
 
-        const VISUAL_EMOJI_POOL = ["🔒", "🛡️", "🔑", "⚡", "🌟", "🪐", "💎", "🔮", "🌊", "🔥", "🍀", "🌸", "🦅", "🐺", "🐬", "🦊", "🎯", "🚀", "🛸", "⛵", "🏔️", "🏝️", "⚓", "⚔️", "🎨", "🎭", "🎻", "🌙", "☀️", "🌈", "⚡", "👑"];
+        const VISUAL_EMOJI_POOL = [
+            "🪐", "🚀", "🛰️", "🛡️", "💎", "⚡", "🌊", "🔥", "🌲", "🌸", "🍀", "🦊", "🦅", "🦉",
+            "🐬", "🦋", "⚓", "🧭", "🔑", "🔒", "🔮", "🧬", "🌟", "🌕", "🌈", "🏔️", "☕", "🎯",
+            "🧩", "🕊️", "🦁", "👑"
+        ];
         function getVisualFingerprintEmojis(fp) {
-            if (!fp) return "🔒 🌸 ⚡ 🐬 💎 🪐";
+            if (!fp) return "🪐 🚀 🛡️ 💎 ⚡ 🌊";
+            const clean = fp.replace(/^fp_/, '');
             const emojis = [];
-            for (let i = 0; i < 6; i++) {
-                let chunkVal = 0;
-                for (let j = 0; j < fp.length; j++) {
-                    chunkVal = (chunkVal * 31 + fp.charCodeAt(j) + i * 17) & 0x7fffffff;
+            if (clean.length >= 24 && /^[0-9a-fA-F]+$/.test(clean)) {
+                const bytes = [];
+                for (let i = 0; i < clean.length; i += 2) {
+                    bytes.push(parseInt(clean.substr(i, 2), 16));
                 }
-                emojis.push(VISUAL_EMOJI_POOL[chunkVal % VISUAL_EMOJI_POOL.length]);
+                for (let i = 0; i < 6; i++) {
+                    const idx = ((bytes[i] || 0) ^ (bytes[i + 6] || 0)) % VISUAL_EMOJI_POOL.length;
+                    emojis.push(VISUAL_EMOJI_POOL[idx]);
+                }
+            } else {
+                for (let i = 0; i < 6; i++) {
+                    let chunkVal = 0;
+                    for (let j = 0; j < fp.length; j++) {
+                        chunkVal = (chunkVal * 31 + fp.charCodeAt(j) + i * 17) & 0x7fffffff;
+                    }
+                    emojis.push(VISUAL_EMOJI_POOL[chunkVal % VISUAL_EMOJI_POOL.length]);
+                }
             }
             return emojis.join(" ");
         }
@@ -3711,25 +3745,58 @@
             }, 2600);
         }
 
-        function createNewIdentity() {
+        async function createNewIdentity() {
             try {
-                const randomHex = Math.random().toString(16).substring(2, 10);
-                const newAddr = 'xchat_' + randomHex;
-                const newFp = 'fp_' + Math.random().toString(16).substring(2, 10);
-                myIdentity.address = newAddr;
-                myIdentity.fingerprint = newFp;
-                myIdentity.visualFingerprint = getVisualFingerprintEmojis(newFp);
-                selectedAvatarIndex = Math.floor(Math.random() * AVATAR_PALETTE.length);
+                let newKeys = null;
+                if (isNative && window.AndroidBridge && window.AndroidBridge.generateNewKeys) {
+                    const raw = window.AndroidBridge.generateNewKeys();
+                    newKeys = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                } else {
+                    const res = await fetch(API_BASE + '/api/keygen', { method: 'POST' });
+                    if (res.ok) {
+                        newKeys = await res.json();
+                    }
+                }
 
-                Storage.set('my_address', newAddr);
-                Storage.set('my_fingerprint', newFp);
-                Storage.set('my_avatar_index', String(selectedAvatarIndex));
+                if (newKeys && newKeys.address) {
+                    myIdentity.address = newKeys.address;
+                    myIdentity.fingerprint = newKeys.fingerprint || myIdentity.fingerprint;
+                    myIdentity.visualFingerprint = newKeys.visual_fingerprint || getVisualFingerprintEmojis(myIdentity.fingerprint);
+                    myIdentity.signPubkey = newKeys.sign_pubkey || '';
+                    myIdentity.dhPubkey = newKeys.dh_pubkey || '';
 
-                populateProfileModal();
-                updateQrDisplay();
-                showToast("✨ Fresh cryptographic keys generated!");
+                    Storage.set('my_address', myIdentity.address);
+                    Storage.set('my_fingerprint', myIdentity.fingerprint);
+                    if (myIdentity.signPubkey) Storage.set('my_sign_pubkey', myIdentity.signPubkey);
+                    if (myIdentity.dhPubkey) Storage.set('my_dh_pubkey', myIdentity.dhPubkey);
+
+                    if (window.AndroidBridge && window.AndroidBridge.updateDiscoveryProfile) {
+                        try {
+                            window.AndroidBridge.updateDiscoveryProfile(
+                                myIdentity.username,
+                                myIdentity.displayName,
+                                myIdentity.address,
+                                myIdentity.fingerprint
+                            );
+                        } catch(e) {}
+                    }
+
+                    populateProfileModal();
+                    updateQrDisplay();
+                    updateProfileHeaderBadge();
+                    showToast("✨ Fresh cryptographic keys generated & persisted!");
+                    if (window.AndroidBridge && window.AndroidBridge.toast) {
+                        window.AndroidBridge.toast("✨ Fresh cryptographic keys generated!");
+                    }
+                    if (window.AndroidBridge && window.AndroidBridge.vibrate) {
+                        window.AndroidBridge.vibrate(30);
+                    }
+                } else {
+                    showToast("⚠️ Failed to generate keys from crypto engine", true);
+                }
             } catch(e) {
                 console.error("createNewIdentity error:", e);
+                showToast("⚠️ Key generation failed: " + e.message, true);
             }
         }
 

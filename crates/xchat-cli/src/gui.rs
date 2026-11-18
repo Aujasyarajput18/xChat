@@ -67,11 +67,19 @@ fn get_now_time_string() -> String {
     format!("{:02}:{:02}", hours, minutes)
 }
 
-fn get_profile_path() -> PathBuf {
+pub fn get_profile_path() -> PathBuf {
     if let Some(home) = std::env::var_os("HOME") {
         PathBuf::from(home).join(".xchat_profile.json")
     } else {
         PathBuf::from(".xchat_profile.json")
+    }
+}
+
+pub fn get_keystore_path() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".xchat_keystore.bin")
+    } else {
+        PathBuf::from(".xchat_keystore.bin")
     }
 }
 
@@ -154,7 +162,9 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
     let listener = TcpListener::bind(&bind_addr).await?;
     let local_ip = detect_local_ip();
 
-    let keystore = KeyStore::generate();
+    let keystore_path = get_keystore_path();
+    let keystore =
+        KeyStore::load_or_generate(&keystore_path).unwrap_or_else(|_| KeyStore::generate());
     let my_pub = keystore.identity.public_key();
     let my_address = my_pub.address();
     let my_fingerprint = my_pub.fingerprint();
@@ -166,7 +176,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
         .as_secs();
 
     let profile_path = get_profile_path();
-    let profile = UserProfile::load_from_disk(&profile_path).unwrap_or_else(|_| {
+    let mut profile = UserProfile::load_from_disk(&profile_path).unwrap_or_else(|_| {
         let initial_handle = format!("user_{}", &my_address[6..12]);
         UserProfile::new(
             &initial_handle,
@@ -177,6 +187,11 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
         )
         .unwrap()
     });
+
+    // Ensure profile always reflects current cryptographic identity keys
+    profile.address = my_address.clone();
+    profile.fingerprint = my_fingerprint.clone();
+    let _ = profile.save_to_disk(&profile_path);
 
     let discovery_engine =
         match PeerDiscoveryEngine::bind(DEFAULT_DISCOVERY_PORT, DEFAULT_DISCOVERY_PORT).await {
@@ -264,9 +279,6 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
 
     while let Ok((mut socket, _)) = listener.accept().await {
         let state_clone = state.clone();
-        let my_addr_clone = my_address.clone();
-        let my_fp_clone = my_fingerprint.clone();
-        let visual_fp_clone = visual_fp.clone();
         let local_ip_clone = local_ip.clone();
 
         tokio::spawn(async move {
@@ -338,7 +350,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
             }
 
             if path == "/api/identity" {
-                let (username, display_name, sign_pubkey, dh_pubkey) = {
+                let (username, display_name, sign_pubkey, dh_pubkey, cur_addr, cur_fp, cur_vfp) = {
                     let st = state_clone.lock().unwrap();
                     let pk = st.keystore.identity.public_key();
                     (
@@ -346,14 +358,17 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         st.profile.display_name.clone(),
                         hex::encode(pk.sign_pubkey),
                         hex::encode(pk.dh_pubkey),
+                        pk.address(),
+                        pk.fingerprint(),
+                        pk.visual_fingerprint(),
                     )
                 };
                 let json = serde_json::to_string(&serde_json::json!({
-                    "address": my_addr_clone,
-                    "fingerprint": my_fp_clone,
+                    "address": cur_addr,
+                    "fingerprint": cur_fp,
                     "sign_pubkey": sign_pubkey,
                     "dh_pubkey": dh_pubkey,
-                    "visual_fingerprint": visual_fp_clone,
+                    "visual_fingerprint": cur_vfp,
                     "username": username,
                     "display_name": display_name,
                     "ip": local_ip_clone,
@@ -368,12 +383,67 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     json
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/api/keygen" && method == "POST" {
+                let (new_addr, new_fp, new_visual, sign_pub, dh_pub, bundle_val) = {
+                    let mut st = state_clone.lock().unwrap();
+                    let mut new_ks = KeyStore::generate();
+                    let new_pk = new_ks.identity.public_key();
+                    let addr = new_pk.address();
+                    let fp = new_pk.fingerprint();
+                    let vfp = new_pk.visual_fingerprint();
+                    let spk = hex::encode(new_pk.sign_pubkey);
+                    let dpk = hex::encode(new_pk.dh_pubkey);
+                    let bundle = new_ks.export_bundle();
+
+                    let ks_path = get_keystore_path();
+                    let _ = new_ks.save_to_path(&ks_path);
+
+                    st.profile.address = addr.clone();
+                    st.profile.fingerprint = fp.clone();
+                    let ppath = get_profile_path();
+                    let _ = st.profile.save_to_disk(&ppath);
+
+                    st.keystore = new_ks;
+                    (addr, fp, vfp, spk, dpk, serde_json::to_value(&bundle).unwrap_or_default())
+                };
+
+                let resp_body = serde_json::to_string(&serde_json::json!({
+                    "status": "generated",
+                    "address": new_addr,
+                    "fingerprint": new_fp,
+                    "visual_fingerprint": new_visual,
+                    "sign_pubkey": sign_pub,
+                    "dh_pubkey": dh_pub,
+                    "prekey_bundle": bundle_val
+                })).unwrap_or_else(|_| "{}".to_string());
+
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    cors_headers,
+                    resp_body.len(),
+                    resp_body
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if (path == "/api/bundle" || path == "/api/prekey") && method == "GET" {
+                let bundle_json = {
+                    let mut st = state_clone.lock().unwrap();
+                    let bundle = st.keystore.export_bundle();
+                    serde_json::to_string(&bundle).unwrap_or_else(|_| "{}".to_string())
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    cors_headers,
+                    bundle_json.len(),
+                    bundle_json
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/profile" && method == "GET" {
-                let (profile, reachable, invite_url) = {
+                let (profile, reachable, invite_url, cur_vfp) = {
                     let st = state_clone.lock().unwrap();
                     let sock = format!("{}:{}", st.local_ip, st.local_port);
                     let invite = st.profile.generate_invite_url(&sock);
-                    (st.profile.clone(), sock, invite)
+                    let vfp = st.keystore.identity.public_key().visual_fingerprint();
+                    (st.profile.clone(), sock, invite, vfp)
                 };
                 let json = serde_json::to_string(&serde_json::json!({
                     "username": profile.username,
@@ -382,7 +452,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     "avatar_color": profile.avatar_color,
                     "address": profile.address,
                     "fingerprint": profile.fingerprint,
-                    "visual_fingerprint": visual_fp_clone,
+                    "visual_fingerprint": cur_vfp,
                     "reachable": reachable,
                     "invite_url": invite_url
                 }))
@@ -552,7 +622,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         status: "sent".to_string(),
                     };
 
-                    let (target_opt, my_handle, sign_seed, dh_secret_bytes) = {
+                    let (target_opt, my_handle, my_addr, sign_seed, dh_secret_bytes) = {
                         let mut st = state_clone.lock().unwrap();
                         let hist = st.messages.entry(req.alias.clone()).or_default();
                         hist.push(msg.clone());
@@ -562,7 +632,8 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             c.last_time = now_str.clone();
                         }
                         let (s, d) = st.keystore.identity.to_bytes();
-                        (req.target, st.profile.username.clone(), s, d)
+                        let cur_addr = st.keystore.identity.public_key().address();
+                        (req.target, st.profile.username.clone(), cur_addr, s, d)
                     };
 
                     // Handle Local Assistant / Echo Bot
@@ -628,12 +699,13 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
 
                                     let wire_envelope = serde_json::json!({
                                         "version": 1,
-                                        "sender_address": my_addr_clone,
+                                        "sender_address": my_addr,
                                         "sender_alias": my_handle,
                                         "sender_sign_pubkey": hex::encode(sender_pk.sign_pubkey),
                                         "sender_dh_pubkey": hex::encode(sender_pk.dh_pubkey),
                                         "nonce": hex::encode(nonce),
                                         "ciphertext": hex::encode(ciphertext),
+                                        "text": req.text,
                                         "timestamp": now_ts,
                                         "time_str": now_str,
                                         "signature": hex::encode(signature)
@@ -646,7 +718,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             } else {
                                 // Fallback for standard mobile/Android peers: direct delivery
                                 let wire_envelope = serde_json::json!({
-                                    "sender": my_addr_clone,
+                                    "sender": my_addr,
                                     "alias": my_handle,
                                     "target": target,
                                     "text": req.text,

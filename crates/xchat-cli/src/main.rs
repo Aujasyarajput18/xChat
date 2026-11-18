@@ -203,7 +203,9 @@ async fn main() -> anyhow::Result<()> {
         }
 
         Commands::Sos { message } => {
-            let keystore = KeyStore::generate();
+            let keystore_path = crate::gui::get_keystore_path();
+            let keystore = KeyStore::load_or_generate(&keystore_path)
+                .unwrap_or_else(|_| KeyStore::generate());
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_secs();
@@ -381,6 +383,33 @@ async fn main() -> anyhow::Result<()> {
             let identity_pub = keystore.identity.public_key();
             let bundle = keystore.export_bundle();
 
+            let ks_path = crate::gui::get_keystore_path();
+            if let Err(e) = keystore.save_to_path(&ks_path) {
+                eprintln!("[!] Warning: Failed to persist keystore: {}", e);
+            } else {
+                println!("[+] Keystore securely persisted to: {}", ks_path.display());
+            }
+
+            let ppath = crate::gui::get_profile_path();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let mut profile = xchat_core::UserProfile::load_from_disk(&ppath).unwrap_or_else(|_| {
+                let initial_handle = format!("user_{}", &identity_pub.address()[6..12]);
+                xchat_core::UserProfile::new(
+                    &initial_handle,
+                    "xChat User",
+                    &identity_pub.address(),
+                    &identity_pub.fingerprint(),
+                    now,
+                )
+                .unwrap()
+            });
+            profile.address = identity_pub.address();
+            profile.fingerprint = identity_pub.fingerprint();
+            let _ = profile.save_to_disk(&ppath);
+
             println!("Device Address:      {}", identity_pub.address());
             println!("Identity Fingerprint: {}", identity_pub.fingerprint());
             println!(
@@ -449,7 +478,9 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             } else {
-                let mut keystore = KeyStore::generate();
+                let keystore_path = crate::gui::get_keystore_path();
+                let mut keystore = KeyStore::load_or_generate(&keystore_path)
+                    .unwrap_or_else(|_| KeyStore::generate());
                 println!(
                     "[+] Peer initialized with address: {}",
                     keystore.identity.public_key().address()
@@ -518,7 +549,9 @@ async fn main() -> anyhow::Result<()> {
             let recipient_bundle: PrekeyBundle = serde_json::from_str(&bundle_str)
                 .map_err(|e| anyhow::anyhow!("Failed to parse recipient prekey bundle: {}", e))?;
 
-            let keystore = KeyStore::generate();
+            let keystore_path = crate::gui::get_keystore_path();
+            let keystore = KeyStore::load_or_generate(&keystore_path)
+                .unwrap_or_else(|_| KeyStore::generate());
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_secs();
@@ -617,7 +650,9 @@ async fn main() -> anyhow::Result<()> {
             invite,
         } => {
             let profile_path = get_default_profile_path();
-            let keystore = KeyStore::generate();
+            let keystore_path = crate::gui::get_keystore_path();
+            let keystore = KeyStore::load_or_generate(&keystore_path)
+                .unwrap_or_else(|_| KeyStore::generate());
             let pub_key = keystore.identity.public_key();
             let addr = pub_key.address();
             let fp = pub_key.fingerprint();
@@ -663,7 +698,9 @@ async fn main() -> anyhow::Result<()> {
             println!("[*] Binding UDP beacon listener and probing nearby mesh...");
 
             let engine = PeerDiscoveryEngine::bind(0, DEFAULT_DISCOVERY_PORT).await?;
-            let keystore = KeyStore::generate();
+            let keystore_path = crate::gui::get_keystore_path();
+            let keystore = KeyStore::load_or_generate(&keystore_path)
+                .unwrap_or_else(|_| KeyStore::generate());
             let pub_key = keystore.identity.public_key();
 
             let beacon = DiscoveryBeacon::new(

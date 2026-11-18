@@ -51,6 +51,68 @@ public class AndroidBridge {
     private String myMeshAddress = "";
     private String myFingerprint = "";
 
+    private static final String[] EMOJI_ALPHABET = {
+        "🪐", "🚀", "🛰️", "🛡️", "💎", "⚡", "🌊", "🔥", "🌲", "🌸", "🍀", "🦊", "🦅", "🦉",
+        "🐬", "🦋", "⚓", "🧭", "🔑", "🔒", "🔮", "🧬", "🌟", "🌕", "🌈", "🏔️", "☕", "🎯",
+        "🧩", "🕊️", "🦁", "👑"
+    };
+
+    private void initOrGenerateKeys(boolean forceNew) {
+        String existingSign = prefs.getString("sign_pubkey", "");
+        String existingDh = prefs.getString("dh_pubkey", "");
+        if (!forceNew && existingSign.length() == 64 && existingDh.length() == 64) {
+            this.myMeshAddress = prefs.getString("my_address", "xchat_" + existingSign.substring(0, 16));
+            this.myFingerprint = prefs.getString("fingerprint", existingSign);
+            return;
+        }
+
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        byte[] signSeed = new byte[32];
+        rng.nextBytes(signSeed);
+        byte[] dhSecret = new byte[32];
+        rng.nextBytes(dhSecret);
+
+        byte[] signPub;
+        byte[] dhPub;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            signPub = md.digest(signSeed);
+            md.reset();
+            dhPub = md.digest(dhSecret);
+        } catch (Exception e) {
+            signPub = signSeed;
+            dhPub = dhSecret;
+        }
+
+        StringBuilder signHex = new StringBuilder();
+        for (byte b : signPub) signHex.append(String.format("%02x", b));
+        String signPubStr = signHex.toString();
+
+        StringBuilder dhHex = new StringBuilder();
+        for (byte b : dhPub) dhHex.append(String.format("%02x", b));
+        String dhPubStr = dhHex.toString();
+
+        String addr = "xchat_" + signPubStr.substring(0, 16);
+        String fp = signPubStr;
+
+        StringBuilder visual = new StringBuilder();
+        for (int i = 0; i < 6; i++) {
+            int idx = ((signPub[i] & 0xFF) ^ (signPub[i + 6] & 0xFF)) % EMOJI_ALPHABET.length;
+            visual.append(EMOJI_ALPHABET[idx]);
+        }
+
+        this.myMeshAddress = addr;
+        this.myFingerprint = fp;
+
+        prefs.edit()
+            .putString("sign_pubkey", signPubStr)
+            .putString("dh_pubkey", dhPubStr)
+            .putString("my_address", addr)
+            .putString("fingerprint", fp)
+            .putString("visual_fingerprint", visual.toString())
+            .apply();
+    }
+
     public static class DiscoveredPeerInfo {
         public String username;
         public String displayName;
@@ -86,24 +148,7 @@ public class AndroidBridge {
             prefs.edit().putString("username", this.myUsername).apply();
         }
         this.myDisplayName = prefs.getString("display_name", "Android Node");
-        this.myMeshAddress = prefs.getString("my_address", "");
-        if (this.myMeshAddress == null || this.myMeshAddress.trim().isEmpty()) {
-            byte[] randBytes = new byte[4];
-            new java.security.SecureRandom().nextBytes(randBytes);
-            StringBuilder sb = new StringBuilder("xchat_");
-            for (byte b : randBytes) sb.append(String.format("%02x", b));
-            this.myMeshAddress = sb.toString();
-            prefs.edit().putString("my_address", this.myMeshAddress).apply();
-        }
-        this.myFingerprint = prefs.getString("fingerprint", "");
-        if (this.myFingerprint == null || this.myFingerprint.trim().isEmpty()) {
-            byte[] randBytes = new byte[8];
-            new java.security.SecureRandom().nextBytes(randBytes);
-            StringBuilder sb = new StringBuilder("fp_");
-            for (byte b : randBytes) sb.append(String.format("%02x", b));
-            this.myFingerprint = sb.toString();
-            prefs.edit().putString("fingerprint", this.myFingerprint).apply();
-        }
+        initOrGenerateKeys(false);
 
         startReceiverServer();
         startDiscoveryEngine();
@@ -359,8 +404,21 @@ public class AndroidBridge {
                 os.write(resp.getBytes("UTF-8"));
             } else if (path.startsWith("/api/identity")) {
                 String myAddr = prefs.getString("my_address", myMeshAddress);
-                String respBody = "{\"address\":\"" + myAddr + "\",\"username\":\"" + myUsername + "\",\"display_name\":\"" + myDisplayName + "\",\"fingerprint\":\"" + myFingerprint + "\",\"ip\":\"" + getLocalIpAddress() + "\",\"port\":" + listenPort + ",\"status\":\"online\"}";
+                String signPub = prefs.getString("sign_pubkey", "");
+                String dhPub = prefs.getString("dh_pubkey", "");
+                String vFp = prefs.getString("visual_fingerprint", "");
+                String respBody = "{\"address\":\"" + myAddr + "\",\"username\":\"" + myUsername + "\",\"display_name\":\"" + myDisplayName + "\",\"fingerprint\":\"" + myFingerprint + "\",\"sign_pubkey\":\"" + signPub + "\",\"dh_pubkey\":\"" + dhPub + "\",\"visual_fingerprint\":\"" + vFp + "\",\"ip\":\"" + getLocalIpAddress() + "\",\"port\":" + listenPort + ",\"status\":\"online\"}";
                 String resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + respBody.getBytes("UTF-8").length + "\r\n\r\n" + respBody;
+                os.write(resp.getBytes("UTF-8"));
+            } else if (path.startsWith("/api/keygen")) {
+                String keygenResult = generateNewKeys();
+                String resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + keygenResult.getBytes("UTF-8").length + "\r\n\r\n" + keygenResult;
+                os.write(resp.getBytes("UTF-8"));
+            } else if (path.startsWith("/api/bundle") || path.startsWith("/api/prekey")) {
+                String signPub = prefs.getString("sign_pubkey", "");
+                String dhPub = prefs.getString("dh_pubkey", "");
+                String bundleJson = "{\"identity_key\":{\"sign_pubkey\":\"" + signPub + "\",\"dh_pubkey\":\"" + dhPub + "\"},\"signed_prekey\":\"" + dhPub + "\",\"signed_prekey_signature\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\",\"one_time_prekeys\":[]}";
+                String resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + bundleJson.getBytes("UTF-8").length + "\r\n\r\n" + bundleJson;
                 os.write(resp.getBytes("UTF-8"));
             } else if (path.startsWith("/api/receive")) {
                 if (!body.isEmpty()) {
@@ -617,6 +675,38 @@ public class AndroidBridge {
     @JavascriptInterface
     public String getFingerprint() {
         return this.myFingerprint;
+    }
+
+    @JavascriptInterface
+    public String generateNewKeys() {
+        initOrGenerateKeys(true);
+        try {
+            JSONObject res = new JSONObject();
+            res.put("status", "generated");
+            res.put("address", this.myMeshAddress);
+            res.put("fingerprint", this.myFingerprint);
+            res.put("visual_fingerprint", prefs.getString("visual_fingerprint", ""));
+            res.put("sign_pubkey", prefs.getString("sign_pubkey", ""));
+            res.put("dh_pubkey", prefs.getString("dh_pubkey", ""));
+            return res.toString();
+        } catch (Exception e) {
+            return "{\"status\":\"error\",\"message\":\"" + e.getMessage() + "\"}";
+        }
+    }
+
+    @JavascriptInterface
+    public String getSignPubkey() {
+        return prefs.getString("sign_pubkey", "");
+    }
+
+    @JavascriptInterface
+    public String getDhPubkey() {
+        return prefs.getString("dh_pubkey", "");
+    }
+
+    @JavascriptInterface
+    public String getVisualFingerprint() {
+        return prefs.getString("visual_fingerprint", "");
     }
 
     @JavascriptInterface

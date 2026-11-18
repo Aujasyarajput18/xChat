@@ -183,6 +183,35 @@ impl KeyStore {
             peer_bundles: HashMap::new(),
         })
     }
+
+    /// Default device encryption key for local zero-config persistent storage.
+    pub const DEFAULT_STORAGE_KEY: [u8; 32] = [
+        0x58, 0x43, 0x68, 0x61, 0x74, 0x2d, 0x44, 0x65, 0x76, 0x69, 0x63, 0x65, 0x2d, 0x4b, 0x65,
+        0x79, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x2d, 0x56, 0x61, 0x75, 0x6c, 0x74, 0x2d, 0x4b, 0x65,
+        0x79, 0x21,
+    ];
+
+    /// Save keystore to disk using the local device storage key.
+    pub fn save_to_path(&self, path: &Path) -> Result<(), CoreError> {
+        self.save_encrypted(path, &Self::DEFAULT_STORAGE_KEY)
+    }
+
+    /// Load keystore from disk using the local device storage key.
+    pub fn load_from_path(path: &Path) -> Result<Self, CoreError> {
+        Self::load_encrypted(path, &Self::DEFAULT_STORAGE_KEY)
+    }
+
+    /// Load existing keystore or generate and persist a fresh one for communication.
+    pub fn load_or_generate(path: &Path) -> Result<Self, CoreError> {
+        if path.exists() {
+            if let Ok(ks) = Self::load_from_path(path) {
+                return Ok(ks);
+            }
+        }
+        let ks = Self::generate();
+        let _ = ks.save_to_path(path);
+        Ok(ks)
+    }
 }
 
 #[cfg(test)]
@@ -242,5 +271,20 @@ mod tests {
 
         // Cannot consume again
         assert!(ks.consume_one_time_prekey(&target_pubkey).is_none());
+    }
+
+    #[test]
+    fn test_load_or_generate_persistence() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("keystore.bin");
+
+        let ks1 = KeyStore::load_or_generate(&path).expect("generate first time");
+        let addr1 = ks1.identity.public_key().address();
+
+        let ks2 = KeyStore::load_or_generate(&path).expect("load second time");
+        let addr2 = ks2.identity.public_key().address();
+
+        assert_eq!(addr1, addr2);
+        assert_eq!(ks1.signed_prekey.pubkey, ks2.signed_prekey.pubkey);
     }
 }
