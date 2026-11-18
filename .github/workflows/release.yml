@@ -106,9 +106,40 @@ jobs:
             xchat-mobile-core.tar.gz
             xchat-mobile-core.sha256
 
+  build-android-apk:
+    name: Build Standalone Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build Android Release APK
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          chmod +x scripts/build-apk.sh
+          ./scripts/build-apk.sh
+
+      - name: Upload Android APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: xchat-android-apk
+          path: |
+            dist/*.apk
+            dist/*.sha256
+
   publish-github-release:
     name: Publish Release on GitHub
-    needs: [build-desktop, build-mobile-libraries]
+    needs: [build-desktop, build-mobile-libraries, build-android-apk]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -120,7 +151,7 @@ jobs:
 
       - name: Generate Checksums & Sign Artifacts with Sigstore
         run: |
-          find . -name "*.tar.gz" -o -name "*.zip" | while read -r file; do
+          find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.apk" | while read -r file; do
             cosign sign-blob --yes --output-signature "${file}.sig" --output-certificate "${file}.pem" "$file" || true
           done
 

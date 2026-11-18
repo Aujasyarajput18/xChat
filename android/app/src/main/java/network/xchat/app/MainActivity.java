@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setLoadsImagesAutomatically(true);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);

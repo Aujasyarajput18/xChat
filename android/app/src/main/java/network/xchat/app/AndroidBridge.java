@@ -80,7 +80,7 @@ public class AndroidBridge {
     public AndroidBridge(MainActivity activity) {
         this.activity = activity;
         this.prefs = activity.getSharedPreferences("xchat_prefs", Context.MODE_PRIVATE);
-        this.myUsername = prefs.getString("username", "user_" + (int)(Math.random() * 89999 + 10000));
+        this.myUsername = prefs.getString("username", "user_" + (new java.security.SecureRandom().nextInt(90000) + 10000));
         this.myDisplayName = prefs.getString("display_name", "Android Node");
         this.myMeshAddress = prefs.getString("my_address", "xchat_android");
         this.myFingerprint = prefs.getString("fingerprint", "");
@@ -304,20 +304,32 @@ public class AndroidBridge {
             int contentLength = 0;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
                 if (line.toLowerCase().startsWith("content-length:")) {
-                    contentLength = Integer.parseInt(line.substring(15).trim());
+                    try {
+                        contentLength = Integer.parseInt(line.substring(15).trim());
+                    } catch (NumberFormatException ignored) {
+                        contentLength = 0;
+                    }
                 }
+            }
+
+            // Cap maximum payload at 1 MB to eliminate memory exhaustion DoS
+            final int MAX_BODY_SIZE = 1024 * 1024;
+            if (contentLength < 0 || contentLength > MAX_BODY_SIZE) {
+                socket.close();
+                return;
             }
 
             StringBuilder bodyBuilder = new StringBuilder();
             if (contentLength > 0) {
-                char[] buf = new char[contentLength];
-                int read = 0;
-                while (read < contentLength) {
-                    int r = reader.read(buf, read, contentLength - read);
+                char[] chunk = new char[Math.min(contentLength, 4096)];
+                int totalRead = 0;
+                while (totalRead < contentLength) {
+                    int toRead = Math.min(chunk.length, contentLength - totalRead);
+                    int r = reader.read(chunk, 0, toRead);
                     if (r == -1) break;
-                    read += r;
+                    bodyBuilder.append(chunk, 0, r);
+                    totalRead += r;
                 }
-                bodyBuilder.append(buf, 0, read);
             }
             final String body = bodyBuilder.toString();
 
