@@ -400,23 +400,37 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     username: Option<String>,
                     display_name: Option<String>,
                     bio: Option<String>,
-                    avatar_color: Option<String>,
+                    avatar_color: Option<serde_json::Value>,
                 }
                 if let Ok(req) = serde_json::from_str::<UpdateProfileReq>(&body) {
                     let mut st = state_clone.lock().unwrap();
                     if let Some(u) = req.username {
                         if let Ok(clean) = UserProfile::validate_and_normalize_username(&u) {
                             st.profile.username = clean;
+                        } else if !u.trim().is_empty() {
+                            let clean = if u.trim().starts_with('@') {
+                                u.trim().to_lowercase()
+                            } else {
+                                format!("@{}", u.trim().to_lowercase())
+                            };
+                            st.profile.username = clean;
                         }
                     }
                     if let Some(dn) = req.display_name {
-                        st.profile.display_name = dn;
+                        if !dn.trim().is_empty() {
+                            st.profile.display_name = dn.trim().to_string();
+                        }
                     }
                     if let Some(b) = req.bio {
                         st.profile.bio = b;
                     }
                     if let Some(ac) = req.avatar_color {
-                        st.profile.avatar_color = ac;
+                        let color_str = match ac {
+                            serde_json::Value::Number(n) => n.to_string(),
+                            serde_json::Value::String(s) => s,
+                            _ => "0".to_string(),
+                        };
+                        st.profile.avatar_color = color_str;
                     }
                     let ppath = get_profile_path();
                     let _ = st.profile.save_to_disk(&ppath);
@@ -474,25 +488,40 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/contacts" && method == "POST" {
+                #[allow(dead_code)]
                 #[derive(Deserialize)]
                 struct AddContactReq {
                     alias: String,
                     target: Option<String>,
+                    bundle: Option<String>,
+                    fingerprint: Option<String>,
+                    address: Option<String>,
                 }
                 if let Ok(req) = serde_json::from_str::<AddContactReq>(&body) {
                     let target_str = req.target.unwrap_or_default();
                     let mut st = state_clone.lock().unwrap();
-                    if !st.contacts.iter().any(|c| c.alias == req.alias) {
-                        st.contacts.push(ContactEntry {
-                            alias: req.alias.clone(),
-                            address: format!(
+                    if let Some(existing) = st
+                        .contacts
+                        .iter_mut()
+                        .find(|c| c.alias.eq_ignore_ascii_case(&req.alias))
+                    {
+                        if !target_str.is_empty() {
+                            existing.target = target_str;
+                        }
+                    } else {
+                        let addr = req.address.unwrap_or_else(|| {
+                            format!(
                                 "xchat_{}",
                                 hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
-                            ),
+                            )
+                        });
+                        st.contacts.push(ContactEntry {
+                            alias: req.alias.clone(),
+                            address: addr,
                             target: target_str,
                             status: "Connected".to_string(),
                             last_message: "Tap to chat".to_string(),
-                            last_time: String::new(),
+                            last_time: get_now_time_string(),
                         });
                     }
                 }

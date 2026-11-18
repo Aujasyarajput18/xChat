@@ -81,6 +81,54 @@ public class MainActivity extends Activity {
             public void onPermissionRequest(final android.webkit.PermissionRequest request) {
                 request.grant(request.getResources());
             }
+
+            @Override
+            public boolean onJsAlert(WebView view, String url, String message, final android.webkit.JsResult result) {
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                    .setTitle("xChat")
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dialog, int which) {
+                            result.confirm();
+                        }
+                    })
+                    .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(android.content.DialogInterface dialog) {
+                            result.cancel();
+                        }
+                    })
+                    .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsConfirm(WebView view, String url, String message, final android.webkit.JsResult result) {
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                    .setTitle("xChat")
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dialog, int which) {
+                            result.confirm();
+                        }
+                    })
+                    .setNegativeButton(android.R.string.cancel, new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dialog, int which) {
+                            result.cancel();
+                        }
+                    })
+                    .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(android.content.DialogInterface dialog) {
+                            result.cancel();
+                        }
+                    })
+                    .show();
+                return true;
+            }
         });
     }
 

@@ -80,10 +80,30 @@ public class AndroidBridge {
     public AndroidBridge(MainActivity activity) {
         this.activity = activity;
         this.prefs = activity.getSharedPreferences("xchat_prefs", Context.MODE_PRIVATE);
-        this.myUsername = prefs.getString("username", "user_" + (new java.security.SecureRandom().nextInt(90000) + 10000));
+        this.myUsername = prefs.getString("username", "");
+        if (this.myUsername == null || this.myUsername.trim().isEmpty()) {
+            this.myUsername = "@user_" + (new java.security.SecureRandom().nextInt(90000) + 10000);
+            prefs.edit().putString("username", this.myUsername).apply();
+        }
         this.myDisplayName = prefs.getString("display_name", "Android Node");
-        this.myMeshAddress = prefs.getString("my_address", "xchat_android");
+        this.myMeshAddress = prefs.getString("my_address", "");
+        if (this.myMeshAddress == null || this.myMeshAddress.trim().isEmpty()) {
+            byte[] randBytes = new byte[4];
+            new java.security.SecureRandom().nextBytes(randBytes);
+            StringBuilder sb = new StringBuilder("xchat_");
+            for (byte b : randBytes) sb.append(String.format("%02x", b));
+            this.myMeshAddress = sb.toString();
+            prefs.edit().putString("my_address", this.myMeshAddress).apply();
+        }
         this.myFingerprint = prefs.getString("fingerprint", "");
+        if (this.myFingerprint == null || this.myFingerprint.trim().isEmpty()) {
+            byte[] randBytes = new byte[8];
+            new java.security.SecureRandom().nextBytes(randBytes);
+            StringBuilder sb = new StringBuilder("fp_");
+            for (byte b : randBytes) sb.append(String.format("%02x", b));
+            this.myFingerprint = sb.toString();
+            prefs.edit().putString("fingerprint", this.myFingerprint).apply();
+        }
 
         startReceiverServer();
         startDiscoveryEngine();
@@ -577,6 +597,26 @@ public class AndroidBridge {
     @JavascriptInterface
     public String loadPersistent(String key) {
         return prefs.getString(key, "");
+    }
+
+    @JavascriptInterface
+    public String getUsername() {
+        return this.myUsername;
+    }
+
+    @JavascriptInterface
+    public String getDisplayName() {
+        return this.myDisplayName;
+    }
+
+    @JavascriptInterface
+    public String getMeshAddress() {
+        return this.myMeshAddress;
+    }
+
+    @JavascriptInterface
+    public String getFingerprint() {
+        return this.myFingerprint;
     }
 
     @JavascriptInterface

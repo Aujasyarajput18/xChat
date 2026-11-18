@@ -866,14 +866,14 @@
             background: rgba(0, 0, 0, 0.88);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
-            z-index: 1000;
+            z-index: 10000;
             align-items: center;
             justify-content: center;
             padding: 20px;
             box-sizing: border-box;
         }
         .modal-overlay.active {
-            display: flex;
+            display: flex !important;
         }
         .modal-card {
             background: #141414;
@@ -883,6 +883,51 @@
             width: 100%;
             max-width: 440px;
             box-shadow: 0 25px 60px rgba(0, 0, 0, 0.95);
+            position: relative;
+        }
+        .header-handle-badge {
+            font-size: 11px;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--pastel-lavender);
+            background: rgba(212, 196, 251, 0.12);
+            padding: 2px 8px;
+            border-radius: 12px;
+            border: 1px solid rgba(212, 196, 251, 0.25);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .header-handle-badge:hover {
+            background: rgba(212, 196, 251, 0.22);
+        }
+        /* Floating Toast Notification */
+        .toast-box {
+            position: fixed;
+            bottom: 84px;
+            left: 50%;
+            transform: translateX(-50%) translateY(20px);
+            background: #18181b;
+            color: #f5f5f7;
+            border: 1px solid rgba(212, 196, 251, 0.35);
+            padding: 10px 20px;
+            border-radius: 22px;
+            font-size: 13px;
+            font-weight: 500;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.9);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.22s ease, transform 0.22s ease;
+            z-index: 999999;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            max-width: 90vw;
+            text-align: center;
+        }
+        .toast-box.show {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateX(-50%) translateY(0);
+        }
             max-height: 85vh;
             max-height: 85dvh;
             overflow-y: auto;
@@ -1489,13 +1534,16 @@
     <!-- 1. Top Navigation Bar -->
     <header>
         <div class="header-brand">
-            <div class="brand-logo-btn" onclick="openModal('profileModal')" title="View Identity Keys">
+            <div class="brand-logo-btn" onclick="openModal('profileModal')" title="View Identity Keys & Profile">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                 </svg>
             </div>
             <div class="app-title-group">
-                <div class="app-title">xChat</div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span class="app-title">xChat</span>
+                    <span id="headerUserHandle" class="header-handle-badge" onclick="openModal('profileModal')" title="Click to view & edit your profile">@operator</span>
+                </div>
                 <div class="mesh-status-pill">
                     <div class="pulse-dot"></div>
                     <span id="meshStatusLabel">
@@ -1776,6 +1824,9 @@
                         <div class="chat-peer-status-text" id="activePeerStatus">online • Direct P2P</div>
                     </div>
                     <div class="chat-header-actions">
+                        <button class="action-circle-btn" onclick="openModal('addPeerModal')" title="New Chat with Peer">
+                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        </button>
                         <button class="action-circle-btn" onclick="pingActivePeer()" title="Ping Peer Latency">
                             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
                         </button>
@@ -1830,25 +1881,30 @@
     <!-- Modal 1: Smart Connect (@username, invite URI, or IP:Port) -->
     <div class="modal-overlay" id="addPeerModal">
         <div class="modal-card" style="max-width: 400px;">
-            <div class="modal-title font-serif" style="font-size: 20px;">Smart Connect Peer</div>
-            <div class="modal-desc">Connect seamlessly using a @username, invite link, or IP:Port.</div>
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 8px;">
+                <div>
+                    <div class="modal-title font-serif" style="font-size: 20px;">New Chat / Connect Peer</div>
+                    <div class="modal-desc">Start chatting using a @username, nickname, invite link, or IP:Port.</div>
+                </div>
+                <button class="action-circle-btn" onclick="closeModal('addPeerModal')" style="width:30px; height:30px; flex-shrink:0;" title="Close">✕</button>
+            </div>
 
             <div style="margin-bottom: 14px;">
                 <label class="form-label" style="display:flex; justify-content:space-between; align-items:center;">
-                    <span>Peer Identifier</span>
+                    <span>Peer Identifier or Username</span>
                     <span style="font-size:10.5px; color:var(--pastel-lavender); cursor:pointer;" onclick="closeModal('addPeerModal'); openScannerFromQr();">📷 Scan QR</span>
                 </label>
                 <div style="position:relative;">
-                    <input type="text" class="form-input font-mono" id="smartPeerInput" placeholder="@username, invite link, or IP:Port" oninput="onSmartPeerInputChanged(this.value)">
+                    <input type="text" class="form-input font-mono" id="smartPeerInput" placeholder="@username, Alice, or 192.168.1.5:9400" oninput="onSmartPeerInputChanged(this.value)" onkeydown="if(event.key==='Enter') confirmSmartConnect()">
                 </div>
                 <div id="smartResolutionFeedback" style="font-size:11px; margin-top:6px; min-height:18px; color:var(--text-muted); display:flex; align-items:center; gap:6px;">
-                    Enter a peer @username or paste an invite link.
+                    Enter a peer @username, name, or paste an invite link.
                 </div>
             </div>
 
             <div style="margin-bottom: 14px;">
                 <label class="form-label">Display Nickname (Optional)</label>
-                <input type="text" class="form-input" id="newAliasInput" placeholder="e.g. Alice, HQ Station">
+                <input type="text" class="form-input" id="newAliasInput" placeholder="e.g. Alice, HQ Station" onkeydown="if(event.key==='Enter') confirmSmartConnect()">
             </div>
 
             <details style="background:#080808; border:1px solid var(--border-subtle); border-radius:12px; padding:10px 12px; margin-bottom:16px;">
@@ -1863,7 +1919,7 @@
 
             <div class="modal-actions">
                 <button class="btn-action btn-cancel" onclick="closeModal('addPeerModal')">Cancel</button>
-                <button class="btn-action btn-primary" onclick="confirmSmartConnect()">Connect Link</button>
+                <button class="btn-action btn-primary" onclick="confirmSmartConnect()">Start Chat</button>
             </div>
         </div>
     </div>
@@ -2010,16 +2066,24 @@
     <!-- Modal 5: Interactive Profile & Identity Editor -->
     <div class="modal-overlay" id="profileModal">
         <div class="modal-card" style="max-width: 400px;">
-            <div class="modal-title font-serif" style="font-size: 20px;">Mesh Identity & Profile</div>
-            <div class="modal-desc">Configure your anonymous presence broadcasted over local radio.</div>
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 8px;">
+                <div>
+                    <div class="modal-title font-serif" style="font-size: 20px;">Mesh Identity & Profile</div>
+                    <div class="modal-desc">Configure your anonymous presence broadcasted over local radio.</div>
+                </div>
+                <button class="action-circle-btn" onclick="closeModal('profileModal')" style="width:30px; height:30px; flex-shrink:0;" title="Close">✕</button>
+            </div>
 
             <!-- Avatar Preview & Color Swatches -->
             <div style="display: flex; align-items: center; gap: 16px; margin: 16px 0;">
                 <div id="profileAvatarPreview" class="contact-avatar-squircle" style="width: 56px; height: 56px; font-size: 22px; background: linear-gradient(135deg, #d4c4fb, #b8a0f8); flex-shrink: 0;">
                     U
                 </div>
-                <div>
-                    <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;">Avatar Accent</div>
+                <div style="flex:1;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                        <span style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">Avatar Accent</span>
+                        <button type="button" onclick="createNewIdentity()" style="font-size:10.5px; background:rgba(212,196,251,0.12); color:var(--pastel-lavender); border:1px solid rgba(212,196,251,0.25); border-radius:8px; padding:3px 8px; cursor:pointer;" title="Generate a fresh cryptographic address & keys">✨ Create New Keys</button>
+                    </div>
                     <div style="display: flex; gap: 8px;">
                         <div class="swatch-btn" onclick="selectAvatarColor(0)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #d4c4fb, #b8a0f8); cursor:pointer; border:2px solid #fff;"></div>
                         <div class="swatch-btn" onclick="selectAvatarColor(1)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #d2e8b8, #b6d994); cursor:pointer; border:2px solid transparent;"></div>
@@ -2034,15 +2098,15 @@
             <div style="display:flex; flex-direction:column; gap:12px; margin-bottom:16px;">
                 <div>
                     <label style="font-size:11px; color:var(--text-secondary); display:block; margin-bottom:4px; font-weight:600;">Username Handle</label>
-                    <input id="profileUsernameInput" class="form-input font-mono" placeholder="@username" oninput="onProfileUsernameChanged(this.value)" />
+                    <input id="profileUsernameInput" class="form-input font-mono" placeholder="@username" oninput="onProfileUsernameChanged(this.value)" onkeydown="if(event.key==='Enter') saveUserProfile()" />
                 </div>
                 <div>
                     <label style="font-size:11px; color:var(--text-secondary); display:block; margin-bottom:4px; font-weight:600;">Display Name</label>
-                    <input id="profileDisplayNameInput" class="form-input" placeholder="Mesh Operator" oninput="onProfileDisplayNameChanged(this.value)" />
+                    <input id="profileDisplayNameInput" class="form-input" placeholder="Mesh Operator" oninput="onProfileDisplayNameChanged(this.value)" onkeydown="if(event.key==='Enter') saveUserProfile()" />
                 </div>
                 <div>
                     <label style="font-size:11px; color:var(--text-secondary); display:block; margin-bottom:4px; font-weight:600;">Status Bio</label>
-                    <input id="profileBioInput" class="form-input" placeholder="Zero Metadata • Direct P2P" />
+                    <input id="profileBioInput" class="form-input" placeholder="Zero Metadata • Direct P2P" onkeydown="if(event.key==='Enter') saveUserProfile()" />
                 </div>
             </div>
 
@@ -2056,7 +2120,7 @@
 
             <div class="modal-actions">
                 <button class="btn-action btn-cancel" onclick="closeModal('profileModal')">Cancel</button>
-                <button class="btn-action btn-primary" onclick="saveUserProfile()">Save Profile</button>
+                <button class="btn-action btn-primary" onclick="saveUserProfile()">Save & Apply Profile</button>
             </div>
         </div>
     </div>
@@ -2358,9 +2422,12 @@
         };
 
         let myIdentity = {
+            username: Storage.get('my_username') || '@operator',
+            displayName: Storage.get('my_display_name') || 'Mesh Operator',
+            bio: Storage.get('my_bio') || 'Zero Metadata • Direct P2P',
             address: Storage.get('my_address') || 'xchat_' + Math.random().toString(16).substring(2, 10),
             reachable: '127.0.0.1:8080',
-            fingerprint: 'fp_' + Math.random().toString(16).substring(2, 10)
+            fingerprint: Storage.get('my_fingerprint') || 'fp_' + Math.random().toString(16).substring(2, 10)
         };
 
         let contacts = JSON.parse(Storage.get('contacts') || '[]');
@@ -2369,21 +2436,52 @@
         let isNative = !!(window.AndroidBridge && window.AndroidBridge.isNativeAndroid);
         const API_BASE = (window.location.protocol === 'file:') ? 'http://127.0.0.1:4000' : '';
 
+        function updateProfileHeaderBadge() {
+            const el = document.getElementById('headerUserHandle');
+            if (el) el.innerText = myIdentity.username || '@operator';
+        }
+
         async function init() {
-            if (isNative) {
+            if (isNative && window.AndroidBridge) {
                 try {
                     const reachable = window.AndroidBridge.getReachableAddress();
                     if (reachable) myIdentity.reachable = reachable;
+                    if (window.AndroidBridge.getUsername) {
+                        const u = window.AndroidBridge.getUsername();
+                        if (u) myIdentity.username = u;
+                    }
+                    if (window.AndroidBridge.getDisplayName) {
+                        const d = window.AndroidBridge.getDisplayName();
+                        if (d) myIdentity.displayName = d;
+                    }
+                    if (window.AndroidBridge.getMeshAddress) {
+                        const a = window.AndroidBridge.getMeshAddress();
+                        if (a) myIdentity.address = a;
+                    }
+                    if (window.AndroidBridge.getFingerprint) {
+                        const f = window.AndroidBridge.getFingerprint();
+                        if (f) myIdentity.fingerprint = f;
+                    }
+                    Storage.set('my_username', myIdentity.username);
+                    Storage.set('my_display_name', myIdentity.displayName);
+                    Storage.set('my_address', myIdentity.address);
+                    Storage.set('my_fingerprint', myIdentity.fingerprint);
                 } catch(e) {}
             } else {
                 try {
                     const res = await fetch(API_BASE + '/api/identity');
                     if (res.ok) {
                         const data = await res.json();
+                        myIdentity.username = data.username || myIdentity.username;
+                        myIdentity.displayName = data.display_name || myIdentity.displayName;
                         myIdentity.address = data.address || myIdentity.address;
                         myIdentity.fingerprint = data.fingerprint || myIdentity.fingerprint;
+                        myIdentity.visualFingerprint = data.visual_fingerprint || myIdentity.visualFingerprint;
                         myIdentity.reachable = (data.ip || '127.0.0.1') + ':' + (data.port || 8080);
+                        Storage.set('my_username', myIdentity.username);
+                        Storage.set('my_display_name', myIdentity.displayName);
                         Storage.set('my_address', myIdentity.address);
+                        Storage.set('my_fingerprint', myIdentity.fingerprint);
                     }
                 } catch(e) {}
 
@@ -2400,12 +2498,13 @@
             }
 
             document.getElementById('myReachableSocket').innerText = myIdentity.reachable;
+            updateProfileHeaderBadge();
             updateQrDisplay();
             SoundFX.updateUi();
             drawAcousticWaveform(0.2, 0);
             document.getElementById('profileDetailsBody').innerText = 
-                `Username:    ${myIdentity.username || '@user'}\n` +
-                `Display Name:${myIdentity.displayName || 'Operator'}\n` +
+                `Username:    ${myIdentity.username || '@operator'}\n` +
+                `Display Name:${myIdentity.displayName || 'Mesh Operator'}\n` +
                 `Address:     ${myIdentity.address}\n` +
                 `Reachable:   ${myIdentity.reachable}\n` +
                 `Fingerprint: ${myIdentity.fingerprint}\n` +
@@ -2435,7 +2534,7 @@
                 renderContacts();
             }
 
-            if (contacts.length > 0) {
+            if (contacts.length > 0 && window.innerWidth > 768) {
                 selectContact(contacts[0]);
             }
 
@@ -3011,28 +3110,47 @@
         }
 
         async function confirmSmartConnect() {
-            const raw = document.getElementById('smartPeerInput').value.trim();
-            const manualTarget = document.getElementById('newTargetInput').value.trim();
-            let alias = document.getElementById('newAliasInput').value.trim();
-            const bundle = document.getElementById('newBundleInput').value.trim();
+            const raw = (document.getElementById('smartPeerInput')?.value || '').trim();
+            const manualTarget = (document.getElementById('newTargetInput')?.value || '').trim();
+            let alias = (document.getElementById('newAliasInput')?.value || '').trim();
+            const bundle = (document.getElementById('newBundleInput')?.value || '').trim();
+            const feedback = document.getElementById('smartResolutionFeedback');
 
-            const target = smartResolvedTarget || manualTarget || (raw.includes(':') ? raw : null);
+            if (!raw && !alias && !manualTarget) {
+                if (feedback) {
+                    feedback.innerHTML = `<span style="color:var(--status-red); font-weight:600;">⚠️ Please enter a @username or socket endpoint.</span>`;
+                }
+                document.getElementById('smartPeerInput')?.focus();
+                return;
+            }
 
+            // Resolve target
+            let target = smartResolvedTarget || manualTarget;
+            if (!target) {
+                if (raw.includes(':')) {
+                    target = raw;
+                } else if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(raw)) {
+                    target = raw + ':9400';
+                } else if (raw.startsWith('@') || /^[a-zA-Z0-9_\-\.]+$/.test(raw)) {
+                    target = raw.startsWith('@') ? raw : ('@' + raw);
+                } else {
+                    target = raw || 'Direct';
+                }
+            }
+
+            // Resolve alias
             if (!alias) {
                 if (smartResolvedPeer && (smartResolvedPeer.display_name || smartResolvedPeer.username)) {
                     alias = smartResolvedPeer.display_name || smartResolvedPeer.username;
                 } else if (raw.startsWith('@')) {
                     alias = raw;
-                } else if (target) {
-                    alias = 'Peer ' + target.split(':')[0].split('.').pop();
+                } else if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?$/.test(raw)) {
+                    alias = 'Peer ' + raw.split(':')[0].split('.').pop();
+                } else if (raw) {
+                    alias = raw.startsWith('@') ? raw : ('@' + raw);
                 } else {
                     alias = 'Peer';
                 }
-            }
-
-            if (!target) {
-                alert(`⚠️ Could not resolve a socket target for "${raw}".\nIf connecting to a username, ensure peer's xChat is running on the same Wi-Fi/mesh, or specify IP:Port.`);
-                return;
             }
 
             const newPeer = {
@@ -3041,14 +3159,16 @@
                 bundle: bundle,
                 fingerprint: smartResolvedPeer ? (smartResolvedPeer.fingerprint || '') : '',
                 address: smartResolvedPeer ? (smartResolvedPeer.address || '') : '',
-                status: 'Connected',
-                last_message: 'Connected via Smart Connect',
+                status: target.includes(':') ? 'Connected' : 'P2P Mesh Link',
+                last_message: 'Link established via Smart Connect',
                 last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
             };
 
-            let existingIdx = contacts.findIndex(c => c.alias === alias || c.target === target);
+            let existingIdx = contacts.findIndex(c => c.alias.toLowerCase() === alias.toLowerCase() || (target && target.includes(':') && c.target === target));
             if (existingIdx !== -1) {
-                contacts[existingIdx] = newPeer;
+                contacts[existingIdx].target = target;
+                contacts[existingIdx].status = newPeer.status;
+                contacts[existingIdx].last_time = newPeer.last_time;
             } else {
                 contacts.push(newPeer);
             }
@@ -3066,13 +3186,21 @@
             }
 
             renderContacts();
-            selectContact(newPeer);
+            selectContact(existingIdx !== -1 ? contacts[existingIdx] : newPeer);
             closeModal('addPeerModal');
 
-            document.getElementById('smartPeerInput').value = '';
-            document.getElementById('newAliasInput').value = '';
-            document.getElementById('newTargetInput').value = '';
-            document.getElementById('newBundleInput').value = '';
+            if (document.getElementById('smartPeerInput')) document.getElementById('smartPeerInput').value = '';
+            if (document.getElementById('newAliasInput')) document.getElementById('newAliasInput').value = '';
+            if (document.getElementById('newTargetInput')) document.getElementById('newTargetInput').value = '';
+            if (document.getElementById('newBundleInput')) document.getElementById('newBundleInput').value = '';
+
+            showToast(`Connected with ${alias}!`);
+            if (window.AndroidBridge && window.AndroidBridge.vibrate) {
+                window.AndroidBridge.vibrate(25);
+            }
+            if (window.AndroidBridge && window.AndroidBridge.toast) {
+                window.AndroidBridge.toast(`Added ${alias}`);
+            }
         }
 
         const confirmAddPeer = confirmSmartConnect;
@@ -3565,84 +3693,172 @@
             }
         }
 
-        function populateProfileModal() {
-            const uInput = document.getElementById('profileUsernameInput');
-            const dInput = document.getElementById('profileDisplayNameInput');
-            const bInput = document.getElementById('profileBioInput');
-            if (uInput) uInput.value = myIdentity.username || '@operator';
-            if (dInput) dInput.value = myIdentity.displayName || 'Mesh Operator';
-            if (bInput) bInput.value = Storage.get('my_bio') || 'Zero Metadata • Direct P2P';
-
-            const preview = document.getElementById('profileAvatarPreview');
-            if (preview) {
-                preview.innerText = (myIdentity.displayName || myIdentity.username || 'U').replace('@', '').charAt(0).toUpperCase();
-                if (AVATAR_PALETTE[selectedAvatarIndex]) preview.style.background = AVATAR_PALETTE[selectedAvatarIndex];
+        let toastTimeout = null;
+        function showToast(msg, isError = false) {
+            let toast = document.getElementById('toastNotification');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'toastNotification';
+                toast.className = 'toast-box';
+                document.body.appendChild(toast);
             }
-            selectAvatarColor(selectedAvatarIndex);
+            toast.innerText = msg;
+            toast.style.borderColor = isError ? 'var(--status-red)' : 'rgba(212, 196, 251, 0.4)';
+            toast.classList.add('show');
+            if (toastTimeout) clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2600);
+        }
 
-            const detailsBody = document.getElementById('profileDetailsBody');
-            if (detailsBody) {
-                detailsBody.innerText = 
-                    `Username:       ${myIdentity.username || '@operator'}\n` +
-                    `Display Name:   ${myIdentity.displayName || 'Mesh Operator'}\n` +
-                    `Address:        ${myIdentity.address}\n` +
-                    `Reachable:      ${myIdentity.reachable}\n` +
-                    `Fingerprint:    ${myIdentity.fingerprint}\n` +
-                    `Visual Safety:  ${myIdentity.visualFingerprint || getVisualFingerprintEmojis(myIdentity.fingerprint)}\n` +
-                    `Radio Carrier:  Local UDP Beacon Radar (Port 9444)\n` +
-                    `Mixnet Onion:   Sphinx Routing (3 hops)`;
+        function createNewIdentity() {
+            try {
+                const randomHex = Math.random().toString(16).substring(2, 10);
+                const newAddr = 'xchat_' + randomHex;
+                const newFp = 'fp_' + Math.random().toString(16).substring(2, 10);
+                myIdentity.address = newAddr;
+                myIdentity.fingerprint = newFp;
+                myIdentity.visualFingerprint = getVisualFingerprintEmojis(newFp);
+                selectedAvatarIndex = Math.floor(Math.random() * AVATAR_PALETTE.length);
+
+                Storage.set('my_address', newAddr);
+                Storage.set('my_fingerprint', newFp);
+                Storage.set('my_avatar_index', String(selectedAvatarIndex));
+
+                populateProfileModal();
+                updateQrDisplay();
+                showToast("✨ Fresh cryptographic keys generated!");
+            } catch(e) {
+                console.error("createNewIdentity error:", e);
+            }
+        }
+
+        function populateProfileModal() {
+            try {
+                const uInput = document.getElementById('profileUsernameInput');
+                const dInput = document.getElementById('profileDisplayNameInput');
+                const bInput = document.getElementById('profileBioInput');
+                if (uInput) uInput.value = myIdentity.username || '@operator';
+                if (dInput) dInput.value = myIdentity.displayName || 'Mesh Operator';
+                if (bInput) bInput.value = myIdentity.bio || Storage.get('my_bio') || 'Zero Metadata • Direct P2P';
+
+                let idx = parseInt(Storage.get('my_avatar_index') || '0', 10);
+                if (isNaN(idx) || idx < 0 || idx >= AVATAR_PALETTE.length) idx = 0;
+                selectedAvatarIndex = idx;
+
+                const preview = document.getElementById('profileAvatarPreview');
+                if (preview) {
+                    const name = (myIdentity.displayName || myIdentity.username || 'U').replace('@', '').trim();
+                    preview.innerText = name ? name.charAt(0).toUpperCase() : 'U';
+                    if (AVATAR_PALETTE[selectedAvatarIndex]) preview.style.background = AVATAR_PALETTE[selectedAvatarIndex];
+                }
+                selectAvatarColor(selectedAvatarIndex);
+
+                const detailsBody = document.getElementById('profileDetailsBody');
+                if (detailsBody) {
+                    detailsBody.innerText = 
+                        `Username:       ${myIdentity.username || '@operator'}\n` +
+                        `Display Name:   ${myIdentity.displayName || 'Mesh Operator'}\n` +
+                        `Address:        ${myIdentity.address || 'xchat_local'}\n` +
+                        `Reachable:      ${myIdentity.reachable || '127.0.0.1:8080'}\n` +
+                        `Fingerprint:    ${myIdentity.fingerprint || 'fp_00000000'}\n` +
+                        `Visual Safety:  ${myIdentity.visualFingerprint || getVisualFingerprintEmojis(myIdentity.fingerprint)}\n` +
+                        `Radio Carrier:  Local UDP Beacon Radar (Port 9444)\n` +
+                        `Mixnet Onion:   Sphinx Routing (3 hops)`;
+                }
+            } catch(e) {
+                console.error("populateProfileModal error:", e);
             }
         }
 
         async function saveUserProfile() {
-            let uVal = document.getElementById('profileUsernameInput').value.trim();
-            if (!uVal) uVal = '@operator';
-            if (!uVal.startsWith('@')) uVal = '@' + uVal;
+            try {
+                let uVal = (document.getElementById('profileUsernameInput')?.value || '').trim();
+                if (!uVal) uVal = '@operator';
+                if (!uVal.startsWith('@')) uVal = '@' + uVal;
 
-            let dVal = document.getElementById('profileDisplayNameInput').value.trim();
-            if (!dVal) dVal = 'Mesh Operator';
+                let dVal = (document.getElementById('profileDisplayNameInput')?.value || '').trim();
+                if (!dVal) dVal = 'Mesh Operator';
 
-            const bVal = document.getElementById('profileBioInput').value.trim();
+                const bVal = (document.getElementById('profileBioInput')?.value || '').trim() || 'Zero Metadata • Direct P2P';
 
-            myIdentity.username = uVal;
-            myIdentity.displayName = dVal;
-            Storage.set('my_username', uVal);
-            Storage.set('my_display_name', dVal);
-            Storage.set('my_bio', bVal);
-            Storage.set('my_avatar_index', String(selectedAvatarIndex));
+                myIdentity.username = uVal;
+                myIdentity.displayName = dVal;
+                myIdentity.bio = bVal;
 
-            if (!isNative) {
-                try {
-                    await fetch(API_BASE + '/api/profile', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            username: uVal,
-                            display_name: dVal,
-                            bio: bVal,
-                            avatar_color: selectedAvatarIndex
-                        })
-                    });
-                } catch(e) {}
-            } else if (window.AndroidBridge && window.AndroidBridge.updateDiscoveryProfile) {
-                window.AndroidBridge.updateDiscoveryProfile(uVal, dVal, myIdentity.address, myIdentity.fingerprint);
+                Storage.set('my_username', uVal);
+                Storage.set('my_display_name', dVal);
+                Storage.set('my_bio', bVal);
+                Storage.set('my_avatar_index', String(selectedAvatarIndex));
+
+                if (!isNative) {
+                    try {
+                        await fetch(API_BASE + '/api/profile', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                username: uVal,
+                                display_name: dVal,
+                                bio: bVal,
+                                avatar_color: String(selectedAvatarIndex)
+                            })
+                        });
+                    } catch(e) {}
+                } else if (window.AndroidBridge && window.AndroidBridge.updateDiscoveryProfile) {
+                    try {
+                        window.AndroidBridge.updateDiscoveryProfile(uVal, dVal, myIdentity.address, myIdentity.fingerprint);
+                    } catch(e) {}
+                }
+
+                updateQrDisplay();
+                updateProfileHeaderBadge();
+                closeModal('profileModal');
+                showToast(`✅ Profile saved: ${uVal} (${dVal})`);
+                if (window.AndroidBridge && window.AndroidBridge.toast) {
+                    window.AndroidBridge.toast(`Profile updated: ${uVal}`);
+                }
+            } catch(err) {
+                console.error("saveUserProfile error:", err);
+                showToast("⚠️ Could not save profile: " + err.message, true);
             }
-
-            updateQrDisplay();
-            closeModal('profileModal');
-            alert(`✅ Profile updated! Broadcasting as ${uVal} (${dVal}) across local mesh.`);
         }
 
         function openModal(id) {
-            document.getElementById(id).classList.add('active');
-            if (id === 'qrModal') {
-                updateQrDisplay();
-            }
-            if (id === 'profileModal') {
-                populateProfileModal();
+            try {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.classList.add('active');
+                }
+                if (id === 'qrModal') {
+                    updateQrDisplay();
+                }
+                if (id === 'profileModal') {
+                    populateProfileModal();
+                }
+                if (id === 'addPeerModal') {
+                    setTimeout(() => {
+                        const input = document.getElementById('smartPeerInput');
+                        if (input) input.focus();
+                    }, 50);
+                }
+            } catch(e) {
+                console.error("openModal error:", e);
             }
         }
-        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+
+        function closeModal(id) {
+            try {
+                const el = document.getElementById(id);
+                if (el) el.classList.remove('active');
+            } catch(e) {}
+        }
+
+        // Close modal when tapping backdrop outside the modal-card
+        document.addEventListener('click', function(e) {
+            if (e.target && e.target.classList && e.target.classList.contains('modal-overlay')) {
+                e.target.classList.remove('active');
+            }
+        });
 
         function escapeHtml(text) {
             if (!text) return '';
