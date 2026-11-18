@@ -335,10 +335,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 String::new()
             };
 
-            let cors_headers = format!(
-                "Access-Control-Allow-Origin: http://localhost:{}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n",
-                port
-            );
+            let cors_headers = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n";
 
             if method == "OPTIONS" {
                 let resp = format!(

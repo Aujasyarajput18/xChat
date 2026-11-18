@@ -2309,6 +2309,29 @@
             ctx.restore();
         }
 
+        // Persistent Storage Wrapper supporting Native Android & LocalStorage
+        const Storage = {
+            get: (key) => {
+                try {
+                    if (window.AndroidBridge && window.AndroidBridge.loadPersistent) {
+                        const val = window.AndroidBridge.loadPersistent(key);
+                        if (val) return val;
+                    }
+                    return localStorage.getItem(key);
+                } catch(e) {
+                    return null;
+                }
+            },
+            set: (key, val) => {
+                try {
+                    if (window.AndroidBridge && window.AndroidBridge.savePersistent) {
+                        window.AndroidBridge.savePersistent(key, val);
+                    }
+                    localStorage.setItem(key, val);
+                } catch(e) {}
+            }
+        };
+
         // Web Audio Synthesized Sound Effects (100% offline, Zero external assets)
         const SoundFX = {
             ctx: null,
@@ -2403,23 +2426,6 @@
             }
             return AVATAR_PALETTE[Math.abs(hash) % AVATAR_PALETTE.length];
         }
-
-        // Persistent Storage Wrapper supporting Native Android & LocalStorage
-        const Storage = {
-            get: (key) => {
-                if (window.AndroidBridge && window.AndroidBridge.loadPersistent) {
-                    const val = window.AndroidBridge.loadPersistent(key);
-                    if (val) return val;
-                }
-                return localStorage.getItem(key);
-            },
-            set: (key, val) => {
-                if (window.AndroidBridge && window.AndroidBridge.savePersistent) {
-                    window.AndroidBridge.savePersistent(key, val);
-                }
-                localStorage.setItem(key, val);
-            }
-        };
 
         let myIdentity = {
             username: Storage.get('my_username') || '@operator',
@@ -3932,7 +3938,12 @@
             return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
-        window.onload = init;
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
+        window.addEventListener('load', init);
     </script>
 </body>
 </html>
