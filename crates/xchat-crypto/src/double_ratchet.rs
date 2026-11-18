@@ -244,8 +244,8 @@ mod tests {
         let shared_secret = [0x5au8; 32];
 
         // Bob generates his prekey DH
-        let mut rng = OsRng;
-        let bob_dh = StaticSecret::random_from_rng(&mut rng);
+        let rng = OsRng;
+        let bob_dh = StaticSecret::random_from_rng(rng);
         let bob_pub = X25519PublicKey::from(&bob_dh).to_bytes();
 
         let mut alice = DoubleRatchet::init_alice(&shared_secret, &bob_pub);
@@ -284,8 +284,8 @@ mod tests {
     #[test]
     fn test_out_of_order_message_handling() {
         let shared_secret = [0x7cu8; 32];
-        let mut rng = OsRng;
-        let bob_dh = StaticSecret::random_from_rng(&mut rng);
+        let rng = OsRng;
+        let bob_dh = StaticSecret::random_from_rng(rng);
         let bob_pub = X25519PublicKey::from(&bob_dh).to_bytes();
 
         let mut alice = DoubleRatchet::init_alice(&shared_secret, &bob_pub);
