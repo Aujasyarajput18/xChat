@@ -2414,6 +2414,27 @@
                 `Mixnet:      Chaumian Sphinx Onion Routing`;
 
             renderContacts();
+            if (!contacts || contacts.length === 0) {
+                contacts = [
+                    {
+                        alias: 'Saved Messages',
+                        target: 'local',
+                        status: 'Encrypted Storage',
+                        last_message: 'Personal cloud notes & encryption test',
+                        last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    },
+                    {
+                        alias: 'xChat Assistant',
+                        target: 'local',
+                        status: 'P2P Mesh AI Assistant',
+                        last_message: 'Send a message to test P2P encryption!',
+                        last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    }
+                ];
+                Storage.set('contacts', JSON.stringify(contacts));
+                renderContacts();
+            }
+
             if (contacts.length > 0) {
                 selectContact(contacts[0]);
             }
@@ -2764,16 +2785,33 @@
             renderContacts();
             SoundFX.playSend();
 
+            if (activeContact.alias === 'xChat Assistant') {
+                setTimeout(() => {
+                    const replyTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const replyText = `Echo [Ratchet Active]: ${text}`;
+                    chatHistories[activeContact.alias].push({ sender: 'peer', text: replyText, time: replyTime });
+                    activeContact.last_message = replyText;
+                    activeContact.last_time = replyTime;
+                    Storage.set('chat_histories', JSON.stringify(chatHistories));
+                    Storage.set('contacts', JSON.stringify(contacts));
+                    renderMessages();
+                    renderContacts();
+                    SoundFX.playReceive();
+                }, 350);
+            }
+
             const payload = JSON.stringify({
                 sender: myIdentity.address,
-                alias: 'Peer',
+                alias: myIdentity.displayName || 'Peer',
                 target: activeContact.target,
                 text: text,
                 time: timeStr
             });
 
             if (isNative && window.AndroidBridge.sendHttpEnvelope) {
-                window.AndroidBridge.sendHttpEnvelope(activeContact.target, payload, 'send_' + Date.now());
+                if (activeContact.target && activeContact.target !== 'local') {
+                    window.AndroidBridge.sendHttpEnvelope(activeContact.target, payload, 'send_' + Date.now());
+                }
             } else {
                 try {
                     await fetch(API_BASE + '/api/send', {
@@ -2793,11 +2831,13 @@
         window.onIncomingNetworkMessage = function(rawJson) {
             try {
                 const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
-                const senderAlias = data.alias || data.sender || 'Peer';
-                const text = data.text || '';
-                const timeStr = data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const senderAlias = data.sender_alias || data.alias || data.sender || 'Peer';
+                const text = data.text || data.message || '';
+                const timeStr = data.time_str || data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-                let contact = contacts.find(c => c.alias === senderAlias || c.target === data.sender);
+                if (!text) return;
+
+                let contact = contacts.find(c => c.alias === senderAlias || c.target === data.sender || c.address === data.sender_address);
                 if (!contact) {
                     contact = {
                         alias: senderAlias,

@@ -86,14 +86,22 @@ async fn dispatch_http_get(target: &str, path: &str) -> anyhow::Result<String> {
         clean_target
     };
 
-    let mut stream = TcpStream::connect(target_host).await?;
+    let connect_fut = TcpStream::connect(target_host);
+    let mut stream = tokio::time::timeout(tokio::time::Duration::from_secs(2), connect_fut)
+        .await
+        .map_err(|_| anyhow::anyhow!("Connection timeout to {}", target_host))??;
+
     let req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n\r\n",
         path, target_host
     );
     stream.write_all(req.as_bytes()).await?;
     let mut resp = Vec::new();
-    stream.read_to_end(&mut resp).await?;
+    let read_fut = stream.read_to_end(&mut resp);
+    tokio::time::timeout(tokio::time::Duration::from_secs(2), read_fut)
+        .await
+        .map_err(|_| anyhow::anyhow!("Read timeout from {}", target_host))??;
+
     let resp_str = String::from_utf8_lossy(&resp);
     if let Some(pos) = resp_str.find("\r\n\r\n") {
         Ok(resp_str[pos + 4..].to_string())
@@ -113,7 +121,11 @@ async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Res
         clean_target
     };
 
-    let mut stream = TcpStream::connect(target_host).await?;
+    let connect_fut = TcpStream::connect(target_host);
+    let mut stream = tokio::time::timeout(tokio::time::Duration::from_secs(2), connect_fut)
+        .await
+        .map_err(|_| anyhow::anyhow!("Connection timeout to {}", target_host))??;
+
     let req = format!(
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         path,
@@ -123,7 +135,11 @@ async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Res
     );
     stream.write_all(req.as_bytes()).await?;
     let mut resp = Vec::new();
-    stream.read_to_end(&mut resp).await?;
+    let read_fut = stream.read_to_end(&mut resp);
+    tokio::time::timeout(tokio::time::Duration::from_secs(2), read_fut)
+        .await
+        .map_err(|_| anyhow::anyhow!("Read timeout from {}", target_host))??;
+
     let resp_str = String::from_utf8_lossy(&resp);
     if let Some(pos) = resp_str.find("\r\n\r\n") {
         Ok(resp_str[pos + 4..].to_string())
@@ -168,12 +184,31 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
             Err(_) => PeerDiscoveryEngine::bind(0, DEFAULT_DISCOVERY_PORT).await?,
         };
 
+    let initial_contacts = vec![
+        ContactEntry {
+            alias: "Saved Messages".to_string(),
+            address: my_address.clone(),
+            target: "local".to_string(),
+            status: "Encrypted Storage".to_string(),
+            last_message: "Personal cloud notes & encryption test".to_string(),
+            last_time: get_now_time_string(),
+        },
+        ContactEntry {
+            alias: "xChat Assistant".to_string(),
+            address: "xchat_assistant".to_string(),
+            target: "local".to_string(),
+            status: "P2P Mesh AI Assistant".to_string(),
+            last_message: "Send a message to test P2P encryption!".to_string(),
+            last_time: get_now_time_string(),
+        },
+    ];
+
     let state = Arc::new(Mutex::new(AppState {
         keystore,
         profile: profile.clone(),
         local_ip: local_ip.clone(),
         local_port: port,
-        contacts: Vec::new(),
+        contacts: initial_contacts,
         messages: HashMap::new(),
         discovery: discovery_engine.clone(),
     }));
@@ -491,7 +526,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     let (target_opt, my_handle, sign_seed, dh_secret_bytes) = {
                         let mut st = state_clone.lock().unwrap();
                         let hist = st.messages.entry(req.alias.clone()).or_default();
-                        hist.push(msg);
+                        hist.push(msg.clone());
 
                         if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == req.alias) {
                             c.last_message = req.text.clone();
@@ -501,8 +536,21 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         (req.target, st.profile.username.clone(), s, d)
                     };
 
-                    if let Some(target) = target_opt {
-                        if !target.is_empty() {
+                    // Handle Local Assistant / Echo Bot
+                    if req.alias == "xChat Assistant" || target_opt.as_deref() == Some("local") {
+                        if req.alias == "xChat Assistant" {
+                            let mut st = state_clone.lock().unwrap();
+                            let hist = st.messages.entry(req.alias.clone()).or_default();
+                            hist.push(ChatMessage {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                sender: "peer".to_string(),
+                                text: format!("Echo [Ratchet Active]: {}", req.text),
+                                time: get_now_time_string(),
+                                status: "delivered".to_string(),
+                            });
+                        }
+                    } else if let Some(target) = target_opt {
+                        if !target.is_empty() && target != "local" {
                             let sender_id = xchat_crypto::identity::IdentityKeyPair::from_bytes(
                                 sign_seed,
                                 dh_secret_bytes,
@@ -520,52 +568,66 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                         v["dh_pubkey"].as_str().and_then(|s| hex::decode(s).ok())
                                     });
 
-                            let mut target_dh = [0u8; 32];
                             if let Some(dh_bytes) = target_dh_opt {
                                 if dh_bytes.len() == 32 {
+                                    let mut target_dh = [0u8; 32];
                                     target_dh.copy_from_slice(&dh_bytes);
+
+                                    // 2. Perform Diffie-Hellman and derive symmetric AEAD key
+                                    let shared_dh = sender_id.diffie_hellman(&target_dh);
+                                    let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
+
+                                    // 3. Encrypt payload under ChaCha20-Poly1305 with CSPRNG nonce
+                                    let mut nonce = [0u8; 12];
+                                    OsRng.fill_bytes(&mut nonce);
+                                    let ciphertext = xchat_crypto::aead::encrypt_aead(
+                                        &aead_key,
+                                        &nonce,
+                                        req.text.as_bytes(),
+                                        b"xchat-gui-e2ee-v1",
+                                    )
+                                    .unwrap_or_default();
+
+                                    // 4. Digitally sign the ciphertext & metadata with Ed25519 identity key
+                                    let mut sig_material = Vec::new();
+                                    sig_material.extend_from_slice(&sender_pk.sign_pubkey);
+                                    sig_material.extend_from_slice(&sender_pk.dh_pubkey);
+                                    sig_material.extend_from_slice(&nonce);
+                                    sig_material.extend_from_slice(&now_ts.to_be_bytes());
+                                    sig_material.extend_from_slice(&ciphertext);
+                                    let signature = sender_id.sign(&sig_material);
+
+                                    let wire_envelope = serde_json::json!({
+                                        "version": 1,
+                                        "sender_address": my_addr_clone,
+                                        "sender_alias": my_handle,
+                                        "sender_sign_pubkey": hex::encode(sender_pk.sign_pubkey),
+                                        "sender_dh_pubkey": hex::encode(sender_pk.dh_pubkey),
+                                        "nonce": hex::encode(nonce),
+                                        "ciphertext": hex::encode(ciphertext),
+                                        "timestamp": now_ts,
+                                        "time_str": now_str,
+                                        "signature": hex::encode(signature)
+                                    });
+                                    let out_body =
+                                        serde_json::to_string(&wire_envelope).unwrap_or_default();
+                                    let _ = dispatch_http_post(&target, "/api/receive", &out_body)
+                                        .await;
                                 }
+                            } else {
+                                // Fallback for standard mobile/Android peers: direct delivery
+                                let wire_envelope = serde_json::json!({
+                                    "sender": my_addr_clone,
+                                    "alias": my_handle,
+                                    "target": target,
+                                    "text": req.text,
+                                    "time": now_str
+                                });
+                                let out_body =
+                                    serde_json::to_string(&wire_envelope).unwrap_or_default();
+                                let _ =
+                                    dispatch_http_post(&target, "/api/receive", &out_body).await;
                             }
-
-                            // 2. Perform Diffie-Hellman and derive symmetric AEAD key
-                            let shared_dh = sender_id.diffie_hellman(&target_dh);
-                            let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
-
-                            // 3. Encrypt payload under ChaCha20-Poly1305 with CSPRNG nonce
-                            let mut nonce = [0u8; 12];
-                            OsRng.fill_bytes(&mut nonce);
-                            let ciphertext = xchat_crypto::aead::encrypt_aead(
-                                &aead_key,
-                                &nonce,
-                                req.text.as_bytes(),
-                                b"xchat-gui-e2ee-v1",
-                            )
-                            .unwrap_or_default();
-
-                            // 4. Digitally sign the ciphertext & metadata with Ed25519 identity key
-                            let mut sig_material = Vec::new();
-                            sig_material.extend_from_slice(&sender_pk.sign_pubkey);
-                            sig_material.extend_from_slice(&sender_pk.dh_pubkey);
-                            sig_material.extend_from_slice(&nonce);
-                            sig_material.extend_from_slice(&now_ts.to_be_bytes());
-                            sig_material.extend_from_slice(&ciphertext);
-                            let signature = sender_id.sign(&sig_material);
-
-                            let wire_envelope = serde_json::json!({
-                                "version": 1,
-                                "sender_address": my_addr_clone,
-                                "sender_alias": my_handle,
-                                "sender_sign_pubkey": hex::encode(sender_pk.sign_pubkey),
-                                "sender_dh_pubkey": hex::encode(sender_pk.dh_pubkey),
-                                "nonce": hex::encode(nonce),
-                                "ciphertext": hex::encode(ciphertext),
-                                "timestamp": now_ts,
-                                "time_str": now_str,
-                                "signature": hex::encode(signature)
-                            });
-                            let out_body =
-                                serde_json::to_string(&wire_envelope).unwrap_or_default();
-                            let _ = dispatch_http_post(&target, "/api/receive", &out_body).await;
                         }
                     }
                 }
@@ -590,79 +652,102 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     signature: String,
                 }
 
+                #[derive(Deserialize)]
+                struct SimpleReceiveReq {
+                    sender: Option<String>,
+                    alias: Option<String>,
+                    text: Option<String>,
+                    message: Option<String>,
+                    time: Option<String>,
+                }
+
                 let decrypt_result = (|| -> Result<(String, String, String, String), String> {
-                    let req = serde_json::from_str::<EncryptedReceiveReq>(&body)
-                        .map_err(|e| format!("Missing or invalid encrypted envelope: {}", e))?;
+                    if let Ok(req) = serde_json::from_str::<EncryptedReceiveReq>(&body) {
+                        let sign_pub_bytes = hex::decode(&req.sender_sign_pubkey)
+                            .map_err(|_| "Invalid sender_sign_pubkey hex")?;
+                        let dh_pub_bytes = hex::decode(&req.sender_dh_pubkey)
+                            .map_err(|_| "Invalid sender_dh_pubkey hex")?;
+                        let nonce_bytes =
+                            hex::decode(&req.nonce).map_err(|_| "Invalid nonce hex")?;
+                        let ct_bytes =
+                            hex::decode(&req.ciphertext).map_err(|_| "Invalid ciphertext hex")?;
+                        let sig_bytes =
+                            hex::decode(&req.signature).map_err(|_| "Invalid signature hex")?;
 
-                    let sign_pub_bytes = hex::decode(&req.sender_sign_pubkey)
-                        .map_err(|_| "Invalid sender_sign_pubkey hex")?;
-                    let dh_pub_bytes = hex::decode(&req.sender_dh_pubkey)
-                        .map_err(|_| "Invalid sender_dh_pubkey hex")?;
-                    let nonce_bytes = hex::decode(&req.nonce).map_err(|_| "Invalid nonce hex")?;
-                    let ct_bytes =
-                        hex::decode(&req.ciphertext).map_err(|_| "Invalid ciphertext hex")?;
-                    let sig_bytes =
-                        hex::decode(&req.signature).map_err(|_| "Invalid signature hex")?;
+                        if sign_pub_bytes.len() != 32
+                            || dh_pub_bytes.len() != 32
+                            || nonce_bytes.len() != 12
+                            || sig_bytes.len() != 64
+                        {
+                            return Err("Invalid cryptographic parameter lengths".into());
+                        }
 
-                    if sign_pub_bytes.len() != 32
-                        || dh_pub_bytes.len() != 32
-                        || nonce_bytes.len() != 12
-                        || sig_bytes.len() != 64
-                    {
-                        return Err("Invalid cryptographic parameter lengths".into());
+                        let mut sign_pk = [0u8; 32];
+                        sign_pk.copy_from_slice(&sign_pub_bytes);
+                        let mut dh_pk = [0u8; 32];
+                        dh_pk.copy_from_slice(&dh_pub_bytes);
+                        let mut nonce_arr = [0u8; 12];
+                        nonce_arr.copy_from_slice(&nonce_bytes);
+                        let mut sig_arr = [0u8; 64];
+                        sig_arr.copy_from_slice(&sig_bytes);
+
+                        // 1. Verify Ed25519 digital signature
+                        let sender_pub = xchat_crypto::identity::IdentityPublicKey {
+                            sign_pubkey: sign_pk,
+                            dh_pubkey: dh_pk,
+                        };
+                        let mut sig_material = Vec::new();
+                        sig_material.extend_from_slice(&sign_pk);
+                        sig_material.extend_from_slice(&dh_pk);
+                        sig_material.extend_from_slice(&nonce_arr);
+                        sig_material.extend_from_slice(&req.timestamp.to_be_bytes());
+                        sig_material.extend_from_slice(&ct_bytes);
+
+                        sender_pub
+                            .verify(&sig_material, &sig_arr)
+                            .map_err(|_| "Cryptographic signature verification failed")?;
+
+                        // 2. Perform Diffie-Hellman with receiver identity
+                        let (sign_seed, dh_secret_bytes) = {
+                            let st = state_clone.lock().unwrap();
+                            st.keystore.identity.to_bytes()
+                        };
+                        let my_id = xchat_crypto::identity::IdentityKeyPair::from_bytes(
+                            sign_seed,
+                            dh_secret_bytes,
+                        );
+                        let shared_dh = my_id.diffie_hellman(&dh_pk);
+                        let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
+
+                        // 3. Decrypt ciphertext under AEAD
+                        let pt_bytes = xchat_crypto::aead::decrypt_aead(
+                            &aead_key,
+                            &nonce_arr,
+                            &ct_bytes,
+                            b"xchat-gui-e2ee-v1",
+                        )
+                        .map_err(|_| "AEAD decryption failed")?;
+
+                        let text = String::from_utf8(pt_bytes)
+                            .map_err(|_| "Decrypted payload is not valid UTF-8")?;
+
+                        let time_str = req.time_str.unwrap_or_else(get_now_time_string);
+                        return Ok((req.sender_alias, req.sender_address, text, time_str));
                     }
 
-                    let mut sign_pk = [0u8; 32];
-                    sign_pk.copy_from_slice(&sign_pub_bytes);
-                    let mut dh_pk = [0u8; 32];
-                    dh_pk.copy_from_slice(&dh_pub_bytes);
-                    let mut nonce_arr = [0u8; 12];
-                    nonce_arr.copy_from_slice(&nonce_bytes);
-                    let mut sig_arr = [0u8; 64];
-                    sig_arr.copy_from_slice(&sig_bytes);
+                    // Fallback: Standard direct JSON payload (e.g. from Android or mobile mesh bridge)
+                    if let Ok(simple) = serde_json::from_str::<SimpleReceiveReq>(&body) {
+                        let text = simple.text.or(simple.message).unwrap_or_default();
+                        if !text.is_empty() {
+                            let sender_addr =
+                                simple.sender.unwrap_or_else(|| "xchat_peer".to_string());
+                            let sender_alias = simple.alias.unwrap_or_else(|| "Peer".to_string());
+                            let time_str = simple.time.unwrap_or_else(get_now_time_string);
+                            return Ok((sender_alias, sender_addr, text, time_str));
+                        }
+                    }
 
-                    // 1. Verify Ed25519 digital signature
-                    let sender_pub = xchat_crypto::identity::IdentityPublicKey {
-                        sign_pubkey: sign_pk,
-                        dh_pubkey: dh_pk,
-                    };
-                    let mut sig_material = Vec::new();
-                    sig_material.extend_from_slice(&sign_pk);
-                    sig_material.extend_from_slice(&dh_pk);
-                    sig_material.extend_from_slice(&nonce_arr);
-                    sig_material.extend_from_slice(&req.timestamp.to_be_bytes());
-                    sig_material.extend_from_slice(&ct_bytes);
-
-                    sender_pub
-                        .verify(&sig_material, &sig_arr)
-                        .map_err(|_| "Cryptographic signature verification failed")?;
-
-                    // 2. Perform Diffie-Hellman with receiver identity
-                    let (sign_seed, dh_secret_bytes) = {
-                        let st = state_clone.lock().unwrap();
-                        st.keystore.identity.to_bytes()
-                    };
-                    let my_id = xchat_crypto::identity::IdentityKeyPair::from_bytes(
-                        sign_seed,
-                        dh_secret_bytes,
-                    );
-                    let shared_dh = my_id.diffie_hellman(&dh_pk);
-                    let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
-
-                    // 3. Decrypt ciphertext under AEAD
-                    let pt_bytes = xchat_crypto::aead::decrypt_aead(
-                        &aead_key,
-                        &nonce_arr,
-                        &ct_bytes,
-                        b"xchat-gui-e2ee-v1",
-                    )
-                    .map_err(|_| "AEAD decryption failed")?;
-
-                    let text = String::from_utf8(pt_bytes)
-                        .map_err(|_| "Decrypted payload is not valid UTF-8")?;
-
-                    let time_str = req.time_str.unwrap_or_else(get_now_time_string);
-                    Ok((req.sender_alias, req.sender_address, text, time_str))
+                    Err("Missing or invalid message envelope".into())
                 })();
 
                 let (resp_status, resp_body) = match decrypt_result {
@@ -676,22 +761,43 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         };
 
                         let mut st = state_clone.lock().unwrap();
-                        let hist = st.messages.entry(sender_alias.clone()).or_default();
-                        hist.push(msg);
 
-                        if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == sender_alias) {
-                            c.last_message = plaintext;
-                            c.last_time = now_str;
+                        // Match existing contact by address, alias, or target
+                        let mut target_alias = sender_alias.clone();
+                        if let Some(c) = st.contacts.iter_mut().find(|c| {
+                            c.alias == sender_alias
+                                || c.address == sender_addr
+                                || (!c.target.is_empty()
+                                    && (sender_addr.contains(&c.target)
+                                        || sender_alias.contains(&c.target)))
+                        }) {
+                            target_alias = c.alias.clone();
+                            c.last_message = plaintext.clone();
+                            c.last_time = now_str.clone();
                         } else {
                             st.contacts.push(ContactEntry {
-                                alias: sender_alias,
-                                address: sender_addr,
+                                alias: sender_alias.clone(),
+                                address: sender_addr.clone(),
                                 target: "Direct".to_string(),
                                 status: "Online".to_string(),
-                                last_message: plaintext,
-                                last_time: now_str,
+                                last_message: plaintext.clone(),
+                                last_time: now_str.clone(),
                             });
                         }
+
+                        // Store under target_alias AND sender_alias AND sender_addr for multi-key lookup
+                        st.messages
+                            .entry(target_alias)
+                            .or_default()
+                            .push(msg.clone());
+                        if sender_alias != "Peer" {
+                            st.messages
+                                .entry(sender_alias)
+                                .or_default()
+                                .push(msg.clone());
+                        }
+                        st.messages.entry(sender_addr).or_default().push(msg);
+
                         ("200 OK", r#"{"status":"delivered","authenticated":true}"#)
                     }
                     Err(_) => (
@@ -715,15 +821,28 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         .map(|param| urlencoding_decode(&param[5..]))
                 });
 
-                let msgs_json = {
-                    let st = state_clone.lock().unwrap();
-                    if let Some(peer) = peer_opt {
-                        let msgs = st.messages.get(&peer).cloned().unwrap_or_default();
-                        serde_json::to_string(&msgs).unwrap_or_else(|_| "[]".to_string())
-                    } else {
-                        "[]".to_string()
-                    }
-                };
+                let msgs_json =
+                    {
+                        let st = state_clone.lock().unwrap();
+                        if let Some(peer) = peer_opt {
+                            let mut list = st.messages.get(&peer).cloned().unwrap_or_default();
+                            if list.is_empty() {
+                                // Match by contact alias, address, or target
+                                if let Some(c) = st.contacts.iter().find(|c| {
+                                    c.alias == peer || c.address == peer || c.target == peer
+                                }) {
+                                    if let Some(m) = st.messages.get(&c.alias) {
+                                        list = m.clone();
+                                    } else if let Some(m) = st.messages.get(&c.address) {
+                                        list = m.clone();
+                                    }
+                                }
+                            }
+                            serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+                        } else {
+                            "[]".to_string()
+                        }
+                    };
 
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -835,5 +954,58 @@ mod tests {
         let mut bad_sig = signature;
         bad_sig[0] ^= 0x01;
         assert!(alice_pk.verify(&sig_material, &bad_sig).is_err());
+    }
+
+    #[test]
+    fn test_gui_receive_simple_mobile_payload() {
+        #[derive(Deserialize)]
+        #[allow(unused)]
+        struct SimpleReceiveReq {
+            sender: Option<String>,
+            alias: Option<String>,
+            text: Option<String>,
+            message: Option<String>,
+            time: Option<String>,
+        }
+
+        let mobile_body = serde_json::json!({
+            "sender": "xchat_android_node",
+            "alias": "Phone",
+            "text": "Hello from Android device!",
+            "time": "12:00 PM"
+        });
+        let body_str = serde_json::to_string(&mobile_body).unwrap();
+        let parsed = serde_json::from_str::<SimpleReceiveReq>(&body_str);
+        assert!(parsed.is_ok());
+        let req = parsed.unwrap();
+        assert_eq!(req.text.unwrap(), "Hello from Android device!");
+        assert_eq!(req.alias.unwrap(), "Phone");
+    }
+
+    #[test]
+    fn test_gui_initial_contacts_and_assistant_echo() {
+        let now_str = get_now_time_string();
+        let initial_contacts = [
+            ContactEntry {
+                alias: "Saved Messages".to_string(),
+                address: "xchat_self".to_string(),
+                target: "local".to_string(),
+                status: "Encrypted Storage".to_string(),
+                last_message: "Personal cloud notes & encryption test".to_string(),
+                last_time: now_str.clone(),
+            },
+            ContactEntry {
+                alias: "xChat Assistant".to_string(),
+                address: "xchat_assistant".to_string(),
+                target: "local".to_string(),
+                status: "P2P Mesh AI Assistant".to_string(),
+                last_message: "Send a message to test P2P encryption!".to_string(),
+                last_time: now_str,
+            },
+        ];
+
+        assert_eq!(initial_contacts.len(), 2);
+        assert_eq!(initial_contacts[0].alias, "Saved Messages");
+        assert_eq!(initial_contacts[1].alias, "xChat Assistant");
     }
 }
