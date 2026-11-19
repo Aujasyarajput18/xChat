@@ -17,7 +17,7 @@ import android.bluetooth.le.AdvertiseSettings;
 import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
-import android.bluetooth.le.ScanFilter;
+import android.bluetooth.le.ScanRecord;
 import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanSettings;
 import android.content.Context;
@@ -72,6 +72,7 @@ public class BluetoothMeshManager {
     private BluetoothLeAdvertiser advertiser;
     private BluetoothLeScanner scanner;
     private BluetoothGattServer gattServer;
+    private BluetoothGattCharacteristic txChar;
 
     private volatile boolean isAdvertising = false;
     private volatile boolean isScanning = false;
@@ -80,6 +81,7 @@ public class BluetoothMeshManager {
     private final AtomicInteger msgIdCounter = new AtomicInteger(1);
     private final BleReassembler reassembler = new BleReassembler();
     private final Map<String, DiscoveredBleNode> discoveredNodes = new ConcurrentHashMap<>();
+    private final Map<String, BluetoothDevice> connectedCentrals = new ConcurrentHashMap<>();
 
     private AdvertiseCallback advertiseCallback;
     private ScanCallback scanCallback;
@@ -99,7 +101,9 @@ public class BluetoothMeshManager {
         public JSONObject toJson() {
             try {
                 JSONObject obj = new JSONObject();
-                obj.put("username", (username != null && !username.isEmpty()) ? username : "@ble_" + macAddress.replace(":", "").substring(6));
+                String cleanMac = macAddress != null ? macAddress.replace(":", "") : "unknown";
+                String suffix = cleanMac.length() >= 6 ? cleanMac.substring(cleanMac.length() - 6) : cleanMac;
+                obj.put("username", (username != null && !username.isEmpty()) ? username : "@ble_" + suffix);
                 obj.put("display_name", (deviceName != null && !deviceName.isEmpty()) ? deviceName : "BLE Node [" + macAddress + "]");
                 obj.put("address", "ble:" + macAddress);
                 obj.put("fingerprint", "ble:" + macAddress);
@@ -123,7 +127,7 @@ public class BluetoothMeshManager {
         initBluetooth();
     }
 
-    private void initBluetooth() {
+    public synchronized void initBluetooth() {
         try {
             if (!activity.getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {
                 Log.w(TAG, "Hardware Bluetooth Low Energy is not supported on this device.");
@@ -142,9 +146,15 @@ public class BluetoothMeshManager {
                 return;
             }
 
-            startGattServer();
-            startAdvertising();
-            startScanning();
+            if (gattServer == null) {
+                startGattServer();
+            }
+            if (!isAdvertising) {
+                startAdvertising();
+            }
+            if (!isScanning) {
+                startScanning();
+            }
         } catch (SecurityException se) {
             Log.w(TAG, "Bluetooth permissions not yet granted: " + se.getMessage());
         } catch (Exception e) {
@@ -188,6 +198,20 @@ public class BluetoothMeshManager {
                 public void onConnectionStateChange(BluetoothDevice device, int status, int newState) {
                     super.onConnectionStateChange(device, status, newState);
                     Log.d(TAG, "GattServer onConnectionStateChange: device=" + device.getAddress() + " state=" + newState);
+                    if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        connectedCentrals.put(device.getAddress(), device);
+                        DiscoveredBleNode node = new DiscoveredBleNode();
+                        node.macAddress = device.getAddress();
+                        String name = device.getName();
+                        node.deviceName = (name != null && !name.isEmpty()) ? name : "Mac Station";
+                        node.username = "@" + node.deviceName.toLowerCase().replaceAll("[^a-z0-9_]", "_");
+                        node.lastSeen = System.currentTimeMillis();
+                        node.rssi = -50;
+                        discoveredNodes.put(device.getAddress(), node);
+                        bridge.onBlePeerDiscovered(node);
+                    } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        connectedCentrals.remove(device.getAddress());
+                    }
                 }
 
                 @Override
@@ -226,6 +250,21 @@ public class BluetoothMeshManager {
                         } catch (Exception ignored) {}
                     }
 
+                    if (device != null && device.getAddress() != null) {
+                        connectedCentrals.put(device.getAddress(), device);
+                        if (!discoveredNodes.containsKey(device.getAddress())) {
+                            DiscoveredBleNode node = new DiscoveredBleNode();
+                            node.macAddress = device.getAddress();
+                            String name = device.getName();
+                            node.deviceName = (name != null && !name.isEmpty()) ? name : "Mac Station";
+                            node.username = "@" + node.deviceName.toLowerCase().replaceAll("[^a-z0-9_]", "_");
+                            node.lastSeen = System.currentTimeMillis();
+                            node.rssi = -50;
+                            discoveredNodes.put(device.getAddress(), node);
+                            bridge.onBlePeerDiscovered(node);
+                        }
+                    }
+
                     if (RX_CHAR_UUID.equals(characteristic.getUuid()) && value != null && value.length >= BLE_HEADER_LEN) {
                         String fullPayload = reassembler.processPacket(value);
                         if (fullPayload != null) {
@@ -243,6 +282,9 @@ public class BluetoothMeshManager {
                         try {
                             gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value);
                         } catch (Exception ignored) {}
+                    }
+                    if (device != null && device.getAddress() != null) {
+                        connectedCentrals.put(device.getAddress(), device);
                     }
                 }
             });
@@ -262,7 +304,7 @@ public class BluetoothMeshManager {
             );
 
             // TX Characteristic: Notify
-            BluetoothGattCharacteristic txChar = new BluetoothGattCharacteristic(
+            txChar = new BluetoothGattCharacteristic(
                 TX_CHAR_UUID,
                 BluetoothGattCharacteristic.PROPERTY_NOTIFY,
                 BluetoothGattCharacteristic.PERMISSION_READ
@@ -300,15 +342,19 @@ public class BluetoothMeshManager {
             }
 
             AdvertiseSettings settings = new AdvertiseSettings.Builder()
-                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+                .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
                 .setConnectable(true)
                 .setTimeout(0)
-                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+                .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_HIGH)
                 .build();
 
             AdvertiseData data = new AdvertiseData.Builder()
                 .setIncludeDeviceName(false)
                 .addServiceUuid(new ParcelUuid(SERVICE_UUID))
+                .build();
+
+            AdvertiseData scanResponse = new AdvertiseData.Builder()
+                .setIncludeDeviceName(true)
                 .build();
 
             advertiseCallback = new AdvertiseCallback() {
@@ -327,7 +373,7 @@ public class BluetoothMeshManager {
                 }
             };
 
-            advertiser.startAdvertising(settings, data, advertiseCallback);
+            advertiser.startAdvertising(settings, data, scanResponse, advertiseCallback);
         } catch (SecurityException se) {
             Log.w(TAG, "SecurityException starting BLE advertising: " + se.getMessage());
         } catch (Exception e) {
@@ -356,10 +402,6 @@ public class BluetoothMeshManager {
                 return;
             }
 
-            ScanFilter filter = new ScanFilter.Builder()
-                .setServiceUuid(new ParcelUuid(SERVICE_UUID))
-                .build();
-
             ScanSettings settings = new ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build();
@@ -387,7 +429,8 @@ public class BluetoothMeshManager {
                 }
             };
 
-            scanner.startScan(Collections.singletonList(filter), settings, scanCallback);
+            // Start unfiltered scan so hardware filters don't drop 128-bit UUIDs
+            scanner.startScan(null, settings, scanCallback);
             isScanning = true;
             Log.i(TAG, "BLE Mesh physical scanning started.");
         } catch (SecurityException se) {
@@ -404,11 +447,32 @@ public class BluetoothMeshManager {
             String mac = dev.getAddress();
             if (mac == null) return;
 
+            boolean isMatch = false;
+            ScanRecord record = result.getScanRecord();
+            if (record != null && record.getServiceUuids() != null) {
+                for (ParcelUuid pu : record.getServiceUuids()) {
+                    if (SERVICE_UUID.equals(pu.getUuid())) {
+                        isMatch = true;
+                        break;
+                    }
+                }
+            }
+            String devName = dev.getName();
+            if (record != null && (devName == null || devName.isEmpty())) {
+                devName = record.getDeviceName();
+            }
+            if (devName != null && (devName.toLowerCase().contains("xchat") || devName.toLowerCase().contains("mac"))) {
+                isMatch = true;
+            }
+
+            if (!isMatch) return;
+
             DiscoveredBleNode node = discoveredNodes.get(mac);
             if (node == null) {
                 node = new DiscoveredBleNode();
                 node.macAddress = mac;
-                node.deviceName = dev.getName();
+                node.deviceName = (devName != null && !devName.isEmpty()) ? devName : "BLE Node [" + mac + "]";
+                node.username = "@" + node.deviceName.toLowerCase().replaceAll("[^a-z0-9_]", "_");
                 discoveredNodes.put(mac, node);
             }
 
@@ -436,6 +500,43 @@ public class BluetoothMeshManager {
     // =========================================================================
 
     public void sendEnvelope(final String targetMac, final String jsonPayload, final BleSendCallback callback) {
+        final String cleanMac = targetMac.replace("ble:", "");
+
+        // 1. Check if target is an already-connected Central (e.g. Mac)!
+        BluetoothDevice connectedCentral = connectedCentrals.get(cleanMac);
+        if (connectedCentral == null && !connectedCentrals.isEmpty()) {
+            // If there's an active central connected, use it!
+            connectedCentral = connectedCentrals.values().iterator().next();
+        }
+
+        if (connectedCentral != null && gattServer != null && txChar != null) {
+            final BluetoothDevice targetDevice = connectedCentral;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        byte[] payloadBytes = jsonPayload.getBytes(StandardCharsets.UTF_8);
+                        int msgId = msgIdCounter.getAndIncrement() & 0x7FFF;
+                        List<byte[]> chunks = chunkPayload(payloadBytes, 512, msgId);
+                        boolean ok = true;
+                        for (byte[] chunk : chunks) {
+                            txChar.setValue(chunk);
+                            if (!gattServer.notifyCharacteristicChanged(targetDevice, txChar, false)) {
+                                ok = false;
+                                break;
+                            }
+                            try { Thread.sleep(20); } catch (Exception ignored) {}
+                        }
+                        if (callback != null) callback.onResult(ok, ok ? null : "GATT notification failed");
+                    } catch (Exception e) {
+                        if (callback != null) callback.onResult(false, e.getMessage());
+                    }
+                }
+            }).start();
+            return;
+        }
+
+        // 2. Otherwise connect outbound as Client (Peripheral-to-Peripheral / Android-to-Android)
         if (bluetoothAdapter == null || isDestroyed) {
             if (callback != null) callback.onResult(false, "Bluetooth adapter unavailable");
             return;
@@ -445,9 +546,9 @@ public class BluetoothMeshManager {
             @Override
             public void run() {
                 try {
-                    final BluetoothDevice targetDevice = bluetoothAdapter.getRemoteDevice(targetMac);
+                    final BluetoothDevice targetDevice = bluetoothAdapter.getRemoteDevice(cleanMac);
                     if (targetDevice == null) {
-                        if (callback != null) callback.onResult(false, "Remote BLE device not found: " + targetMac);
+                        if (callback != null) callback.onResult(false, "Remote BLE device not found: " + cleanMac);
                         return;
                     }
 
@@ -466,7 +567,7 @@ public class BluetoothMeshManager {
                             synchronized (isDone) {
                                 if (!isDone[0]) {
                                     isDone[0] = true;
-                                    Log.w(TAG, "BLE GATT transmission to " + targetMac + " timed out.");
+                                    Log.w(TAG, "BLE GATT transmission to " + cleanMac + " timed out.");
                                     if (callback != null) callback.onResult(false, "BLE transmission timed out");
                                 }
                             }
@@ -481,9 +582,8 @@ public class BluetoothMeshManager {
                         public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
                             super.onConnectionStateChange(gatt, status, newState);
                             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                                Log.d(TAG, "Connected to BLE peer " + targetMac + ", requesting MTU " + TARGET_MTU);
+                                Log.d(TAG, "Connected to BLE peer " + cleanMac + ", requesting MTU " + TARGET_MTU);
                                 if (!gatt.requestMtu(TARGET_MTU)) {
-                                    // Fallback if MTU request immediate returns false
                                     gatt.discoverServices();
                                 }
                             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
@@ -528,14 +628,12 @@ public class BluetoothMeshManager {
                                 return;
                             }
 
-                            // Slice payload into chunks based on negotiated MTU
                             int effectiveMtu = negotiatedMtu.get();
                             List<byte[]> preparedChunks = chunkPayload(payloadBytes, effectiveMtu, msgId);
                             chunks.clear();
                             chunks.addAll(preparedChunks);
                             currentChunkIdx.set(0);
 
-                            // Send chunk 0
                             writeNextChunk(gatt);
                         }
 
@@ -547,7 +645,6 @@ public class BluetoothMeshManager {
                                 if (next < chunks.size()) {
                                     writeNextChunk(gatt);
                                 } else {
-                                    // All chunks transmitted successfully
                                     finishWithResult(gatt, true, null);
                                 }
                             } else {
@@ -564,7 +661,6 @@ public class BluetoothMeshManager {
                             rxCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE);
                             boolean written = gatt.writeCharacteristic(rxCharacteristic);
                             if (!written) {
-                                // Try with write response if no-response rejected
                                 rxCharacteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
                                 if (!gatt.writeCharacteristic(rxCharacteristic)) {
                                     finishWithResult(gatt, false, "Failed to initiate chunk write on BLE radio");
@@ -587,7 +683,6 @@ public class BluetoothMeshManager {
                         }
                     };
 
-                    // Connect LE
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                         targetDevice.connectGatt(activity, false, clientCallback, BluetoothDevice.TRANSPORT_LE);
                     } else {
@@ -675,7 +770,6 @@ public class BluetoothMeshManager {
             if (packet.length - BLE_HEADER_LEN != payloadLen) return null;
 
             long now = System.currentTimeMillis();
-            // Prune expired assemblies
             Iterator<Map.Entry<Integer, BleChunkAssembly>> it = pending.entrySet().iterator();
             while (it.hasNext()) {
                 if (now - it.next().getValue().firstSeen > INCOMPLETE_TRANSFER_TTL_MS) {

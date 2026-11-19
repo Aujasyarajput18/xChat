@@ -162,6 +162,24 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PERMISSION_REQ_CODE) {
+            if (bridge != null) {
+                bridge.restartBleMesh();
+            }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (bridge != null) {
+            bridge.restartBleMesh();
+        }
+    }
+
     public WebView getWebView() {
         return webView;
     }

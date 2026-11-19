@@ -279,10 +279,16 @@ impl BleCentralTransport {
         let chunks = BleChunker::chunk_payload(data, DEFAULT_BLE_MTU, msg_id);
 
         for chunk in chunks {
-            peer.peripheral
+            let res = peer
+                .peripheral
                 .write(&peer.rx_char, &chunk, WriteType::WithoutResponse)
-                .await
-                .map_err(|e| TransportError::Serialization(format!("BLE write error: {}", e)))?;
+                .await;
+            if res.is_err() {
+                peer.peripheral
+                    .write(&peer.rx_char, &chunk, WriteType::WithResponse)
+                    .await
+                    .map_err(|e| TransportError::Serialization(format!("BLE write error: {}", e)))?;
+            }
         }
 
         Ok(())
