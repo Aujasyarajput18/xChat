@@ -216,7 +216,10 @@ impl BleCentralTransport {
                     };
 
                     if should_connect {
-                        self.connecting_peers.lock().await.insert(freshest_id.clone());
+                        self.connecting_peers
+                            .lock()
+                            .await
+                            .insert(freshest_id.clone());
                         let transport_clone = self.clone();
                         let p = freshest_p.clone();
                         let id = freshest_id.clone();
@@ -292,7 +295,8 @@ impl BleCentralTransport {
                 Ok(info_bytes) => {
                     if let Ok(info_str) = String::from_utf8(info_bytes) {
                         debug!("Read INFO_CHAR from {}: {}", peer_id, info_str);
-                        if let Ok(info_json) = serde_json::from_str::<serde_json::Value>(&info_str) {
+                        if let Ok(info_json) = serde_json::from_str::<serde_json::Value>(&info_str)
+                        {
                             let uname_opt = info_json["username"]
                                 .as_str()
                                 .or_else(|| info_json["sender_alias"].as_str())
@@ -333,7 +337,10 @@ impl BleCentralTransport {
                                 break;
                             }
                             Err(e) => {
-                                warn!("Subscribe attempt {} on {} failed: {}. Retrying in 200ms...", attempt, peer_id, e);
+                                warn!(
+                                    "Subscribe attempt {} on {} failed: {}. Retrying in 200ms...",
+                                    attempt, peer_id, e
+                                );
                                 tokio::time::sleep(Duration::from_millis(200)).await;
                             }
                         }
@@ -355,22 +362,35 @@ impl BleCentralTransport {
                                             peer_id_clone,
                                             assembled_bytes.len()
                                         );
-                                        if let Ok(json_str) = String::from_utf8(assembled_bytes.clone()) {
-                                            info!("BLE reassembled JSON received from {}: {}", peer_id_clone, json_str);
-                                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                                        if let Ok(json_str) =
+                                            String::from_utf8(assembled_bytes.clone())
+                                        {
+                                            info!(
+                                                "BLE reassembled JSON received from {}: {}",
+                                                peer_id_clone, json_str
+                                            );
+                                            if let Ok(json_val) =
+                                                serde_json::from_str::<serde_json::Value>(&json_str)
+                                            {
                                                 let uname_opt = json_val["username"]
                                                     .as_str()
                                                     .or_else(|| json_val["sender_alias"].as_str())
                                                     .or_else(|| json_val["alias"].as_str());
                                                 if let Some(uname) = uname_opt {
-                                                    if let Ok(mut lock) = discovered_devices.lock() {
-                                                        if let Some(dev) = lock.get_mut(&peer_id_clone) {
-                                                            dev.username = Some(if uname.starts_with('@') {
-                                                                uname.to_string()
-                                                            } else {
-                                                                format!("@{}", uname)
-                                                            });
-                                                            if let Some(dname) = json_val["display_name"].as_str() {
+                                                    if let Ok(mut lock) = discovered_devices.lock()
+                                                    {
+                                                        if let Some(dev) =
+                                                            lock.get_mut(&peer_id_clone)
+                                                        {
+                                                            dev.username =
+                                                                Some(if uname.starts_with('@') {
+                                                                    uname.to_string()
+                                                                } else {
+                                                                    format!("@{}", uname)
+                                                                });
+                                                            if let Some(dname) =
+                                                                json_val["display_name"].as_str()
+                                                            {
                                                                 dev.name = dname.to_string();
                                                             }
                                                         }
@@ -379,15 +399,24 @@ impl BleCentralTransport {
                                             }
                                             let _ = inbound_json_tx.send(json_str).await;
                                         }
-                                        if let Ok(env) = bincode::deserialize::<EncryptedEnvelope>(&assembled_bytes) {
+                                        if let Ok(env) = bincode::deserialize::<EncryptedEnvelope>(
+                                            &assembled_bytes,
+                                        ) {
                                             let _ = inbound_tx.send(env).await;
-                                        } else if let Ok(env) = serde_json::from_slice::<EncryptedEnvelope>(&assembled_bytes) {
+                                        } else if let Ok(env) =
+                                            serde_json::from_slice::<EncryptedEnvelope>(
+                                                &assembled_bytes,
+                                            )
+                                        {
                                             let _ = inbound_tx.send(env).await;
                                         }
                                     }
                                     Ok(None) => {}
                                     Err(err) => {
-                                        warn!("BLE chunk reassembly error from {}: {:?}", peer_id_clone, err);
+                                        warn!(
+                                            "BLE chunk reassembly error from {}: {:?}",
+                                            peer_id_clone, err
+                                        );
                                     }
                                 }
                             }
@@ -396,13 +425,19 @@ impl BleCentralTransport {
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to get notification stream for BLE peer {}: {}", peer_id, e);
+                    warn!(
+                        "Failed to get notification stream for BLE peer {}: {}",
+                        peer_id, e
+                    );
                 }
             }
         }
 
         if tx_char.is_some() && !tx_subscribed {
-            warn!("TX subscription failed on {}. Disconnecting to allow clean reconnect.", peer_id);
+            warn!(
+                "TX subscription failed on {}. Disconnecting to allow clean reconnect.",
+                peer_id
+            );
             let _ = peripheral.disconnect().await;
             return;
         }

@@ -1134,45 +1134,44 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         .map(|param| urlencoding_decode(&param[5..]))
                 });
 
-                let msgs_json =
-                    {
-                        let st = state_clone.lock().unwrap();
-                        if let Some(peer) = peer_opt {
-                            let mut list = st.messages.get(&peer).cloned().unwrap_or_default();
-                            if list.is_empty() {
-                                let peer_clean = peer.trim_start_matches('@');
-                                if let Some(m) = st.messages.get(&format!("@{}", peer_clean)) {
+                let msgs_json = {
+                    let st = state_clone.lock().unwrap();
+                    if let Some(peer) = peer_opt {
+                        let mut list = st.messages.get(&peer).cloned().unwrap_or_default();
+                        if list.is_empty() {
+                            let peer_clean = peer.trim_start_matches('@');
+                            if let Some(m) = st.messages.get(&format!("@{}", peer_clean)) {
+                                list = m.clone();
+                            } else if let Some(m) = st.messages.get(peer_clean) {
+                                list = m.clone();
+                            } else if let Some(c) = st.contacts.iter().find(|c| {
+                                c.alias == peer
+                                    || c.address == peer
+                                    || c.target == peer
+                                    || c.target.contains(&peer)
+                                    || c.alias.contains(&peer)
+                                    || peer.contains(&c.alias)
+                            }) {
+                                if let Some(m) = st.messages.get(&c.alias) {
                                     list = m.clone();
-                                } else if let Some(m) = st.messages.get(peer_clean) {
+                                } else if let Some(m) = st.messages.get(&c.address) {
                                     list = m.clone();
-                                } else if let Some(c) = st.contacts.iter().find(|c| {
-                                    c.alias == peer
-                                        || c.address == peer
-                                        || c.target == peer
-                                        || c.target.contains(&peer)
-                                        || c.alias.contains(&peer)
-                                        || peer.contains(&c.alias)
+                                } else if let Some(m) = st.messages.get(&c.target) {
+                                    list = m.clone();
+                                }
+                            } else if peer == "Peer" {
+                                if let Some((_, m)) = st.messages.iter().find(|(k, _)| {
+                                    *k != "xChat Assistant" && *k != "Saved Messages"
                                 }) {
-                                    if let Some(m) = st.messages.get(&c.alias) {
-                                        list = m.clone();
-                                    } else if let Some(m) = st.messages.get(&c.address) {
-                                        list = m.clone();
-                                    } else if let Some(m) = st.messages.get(&c.target) {
-                                        list = m.clone();
-                                    }
-                                } else if peer == "Peer" {
-                                    if let Some((_, m)) = st.messages.iter().find(|(k, _)| {
-                                        *k != "xChat Assistant" && *k != "Saved Messages"
-                                    }) {
-                                        list = m.clone();
-                                    }
+                                    list = m.clone();
                                 }
                             }
-                            serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
-                        } else {
-                            "[]".to_string()
                         }
-                    };
+                        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+                    } else {
+                        "[]".to_string()
+                    }
+                };
 
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
