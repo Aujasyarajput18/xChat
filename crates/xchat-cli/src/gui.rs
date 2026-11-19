@@ -15,6 +15,7 @@ use xchat_core::{keystore::KeyStore, profile::UserProfile};
 use xchat_transport::discovery::{DiscoveryBeacon, PeerDiscoveryEngine, DEFAULT_DISCOVERY_PORT};
 
 pub const EMBEDDED_HTML: &str = include_str!("../../../android/app/src/main/assets/index.html");
+pub const JSQR_JS: &str = include_str!("../../../android/app/src/main/assets/jsqr.min.js");
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct ContactEntry {
@@ -273,10 +274,28 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 // Handle handshake identity notification
                 if data["type"].as_str() == Some("handshake") {
                     let mut st = state_ble_inbound.lock().unwrap();
-                    if let Some(c) = st.contacts.iter_mut().find(|c| c.target.starts_with("ble:") || c.address == sender_addr || c.alias.contains("cmf") || c.alias.contains("nothing")) {
+                    if let Some(c) = st.contacts.iter_mut().find(|c| {
+                        c.target.starts_with("ble:")
+                            || c.address == sender_addr
+                            || c.alias.to_lowercase().contains("cmf")
+                            || c.alias.to_lowercase().contains("nothing")
+                            || c.alias.to_lowercase().contains("phone")
+                    }) {
+                        let prev_alias = c.alias.clone();
                         c.alias = formatted_alias.clone();
-                        if !sender_addr.is_empty() { c.address = sender_addr; }
+                        if !sender_addr.is_empty() {
+                            c.address = sender_addr;
+                        }
                         c.status = "Physical BLE Mesh".to_string();
+                        // Merge chat history from placeholder alias into actual formatted_alias
+                        if prev_alias != formatted_alias {
+                            if let Some(prev_msgs) = st.messages.remove(&prev_alias) {
+                                st.messages
+                                    .entry(formatted_alias.clone())
+                                    .or_default()
+                                    .extend(prev_msgs);
+                            }
+                        }
                     } else {
                         st.contacts.push(ContactEntry {
                             alias: formatted_alias.clone(),
@@ -292,21 +311,49 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
 
                 if !text.is_empty() {
                     let mut st = state_ble_inbound.lock().unwrap();
-                    let hist = st.messages.entry(formatted_alias.clone()).or_default();
-                    hist.push(ChatMessage {
+                    let msg = ChatMessage {
                         id: uuid::Uuid::new_v4().to_string(),
                         sender: "peer".to_string(),
                         text: text.clone(),
                         time: time_str.clone(),
                         status: "delivered".to_string(),
-                    });
+                    };
+
+                    // Record message under formatted_alias, sender_alias, and sender_addr
+                    st.messages
+                        .entry(formatted_alias.clone())
+                        .or_default()
+                        .push(msg.clone());
+                    if sender_alias != formatted_alias {
+                        st.messages
+                            .entry(sender_alias.clone())
+                            .or_default()
+                            .push(msg.clone());
+                    }
+                    if !sender_addr.is_empty() {
+                        st.messages
+                            .entry(sender_addr.clone())
+                            .or_default()
+                            .push(msg.clone());
+                    }
 
                     // Update or insert contact
-                    if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == formatted_alias || c.target.starts_with("ble:") || c.address == sender_addr) {
-                        c.alias = formatted_alias;
-                        c.last_message = text;
-                        c.last_time = time_str;
-                        c.status = "Physical BLE Mesh".to_string();
+                    let found_idx = st.contacts.iter().position(|c| {
+                        c.alias == formatted_alias
+                            || c.alias == sender_alias
+                            || c.target.starts_with("ble:")
+                            || c.address == sender_addr
+                    });
+
+                    if let Some(idx) = found_idx {
+                        let old_alias = st.contacts[idx].alias.clone();
+                        if old_alias != formatted_alias && !formatted_alias.is_empty() {
+                            st.messages.entry(old_alias).or_default().push(msg.clone());
+                            st.contacts[idx].alias = formatted_alias;
+                        }
+                        st.contacts[idx].last_message = text;
+                        st.contacts[idx].last_time = time_str;
+                        st.contacts[idx].status = "Physical BLE Mesh".to_string();
                     } else {
                         st.contacts.push(ContactEntry {
                             alias: formatted_alias,
@@ -495,7 +542,14 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     let _ = st.profile.save_to_disk(&ppath);
 
                     st.keystore = new_ks;
-                    (addr, fp, vfp, spk, dpk, serde_json::to_value(&bundle).unwrap_or_default())
+                    (
+                        addr,
+                        fp,
+                        vfp,
+                        spk,
+                        dpk,
+                        serde_json::to_value(&bundle).unwrap_or_default(),
+                    )
                 };
 
                 let resp_body = serde_json::to_string(&serde_json::json!({
@@ -506,7 +560,8 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     "sign_pubkey": sign_pub,
                     "dh_pubkey": dh_pub,
                     "prekey_bundle": bundle_val
-                })).unwrap_or_else(|_| "{}".to_string());
+                }))
+                .unwrap_or_else(|_| "{}".to_string());
 
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -816,6 +871,8 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                         "version": 1,
                                         "sender_address": my_addr,
                                         "sender_alias": my_handle,
+                                        "alias": my_handle,
+                                        "username": my_handle,
                                         "sender_sign_pubkey": hex::encode(sender_pk.sign_pubkey),
                                         "sender_dh_pubkey": hex::encode(sender_pk.dh_pubkey),
                                         "nonce": hex::encode(nonce),
@@ -832,14 +889,20 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                             let st = state_clone.lock().unwrap();
                                             st.ble_transport.clone()
                                         };
-                                        if let Err(e) = ble_t.send_raw_bytes(&target, out_body.as_bytes()).await {
+                                        if let Err(e) =
+                                            ble_t.send_raw_bytes(&target, out_body.as_bytes()).await
+                                        {
                                             tracing::error!("Physical BLE send failed: {}", e);
                                         } else {
-                                            tracing::info!("Physical BLE message dispatched to {}", target);
+                                            tracing::info!(
+                                                "Physical BLE message dispatched to {}",
+                                                target
+                                            );
                                         }
                                     } else {
-                                        let _ = dispatch_http_post(&target, "/api/receive", &out_body)
-                                            .await;
+                                        let _ =
+                                            dispatch_http_post(&target, "/api/receive", &out_body)
+                                                .await;
                                     }
                                 }
                             } else {
@@ -849,6 +912,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                     "sender_address": my_addr,
                                     "sender_alias": my_handle,
                                     "alias": my_handle,
+                                    "username": my_handle,
                                     "target": target,
                                     "text": req.text,
                                     "time": now_str,
@@ -862,14 +926,19 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                         let st = state_clone.lock().unwrap();
                                         st.ble_transport.clone()
                                     };
-                                    if let Err(e) = ble_t.send_raw_bytes(&target, out_body.as_bytes()).await {
+                                    if let Err(e) =
+                                        ble_t.send_raw_bytes(&target, out_body.as_bytes()).await
+                                    {
                                         tracing::error!("Physical BLE fallback send failed: {}", e);
                                     } else {
-                                        tracing::info!("Physical BLE message dispatched to {}", target);
+                                        tracing::info!(
+                                            "Physical BLE message dispatched to {}",
+                                            target
+                                        );
                                     }
                                 } else {
-                                    let _ =
-                                        dispatch_http_post(&target, "/api/receive", &out_body).await;
+                                    let _ = dispatch_http_post(&target, "/api/receive", &out_body)
+                                        .await;
                                 }
                             }
                         }
@@ -1065,36 +1134,44 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         .map(|param| urlencoding_decode(&param[5..]))
                 });
 
-                let msgs_json =
-                    {
-                        let st = state_clone.lock().unwrap();
-                        if let Some(peer) = peer_opt {
-                            let mut list = st.messages.get(&peer).cloned().unwrap_or_default();
-                            if list.is_empty() {
-                                // Match by contact alias, address, or target
-                                if let Some(c) = st.contacts.iter().find(|c| {
-                                    c.alias == peer || c.address == peer || c.target == peer
+                let msgs_json = {
+                    let st = state_clone.lock().unwrap();
+                    if let Some(peer) = peer_opt {
+                        let mut list = st.messages.get(&peer).cloned().unwrap_or_default();
+                        if list.is_empty() {
+                            let peer_clean = peer.trim_start_matches('@');
+                            if let Some(m) = st.messages.get(&format!("@{}", peer_clean)) {
+                                list = m.clone();
+                            } else if let Some(m) = st.messages.get(peer_clean) {
+                                list = m.clone();
+                            } else if let Some(c) = st.contacts.iter().find(|c| {
+                                c.alias == peer
+                                    || c.address == peer
+                                    || c.target == peer
+                                    || c.target.contains(&peer)
+                                    || c.alias.contains(&peer)
+                                    || peer.contains(&c.alias)
+                            }) {
+                                if let Some(m) = st.messages.get(&c.alias) {
+                                    list = m.clone();
+                                } else if let Some(m) = st.messages.get(&c.address) {
+                                    list = m.clone();
+                                } else if let Some(m) = st.messages.get(&c.target) {
+                                    list = m.clone();
+                                }
+                            } else if peer == "Peer" {
+                                if let Some((_, m)) = st.messages.iter().find(|(k, _)| {
+                                    *k != "xChat Assistant" && *k != "Saved Messages"
                                 }) {
-                                    if let Some(m) = st.messages.get(&c.alias) {
-                                        list = m.clone();
-                                    } else if let Some(m) = st.messages.get(&c.address) {
-                                        list = m.clone();
-                                    }
-                                } else if peer == "Peer" {
-                                    if let Some((_, m)) = st
-                                        .messages
-                                        .iter()
-                                        .find(|(k, _)| *k != "xChat Assistant" && *k != "Saved Messages")
-                                    {
-                                        list = m.clone();
-                                    }
+                                    list = m.clone();
                                 }
                             }
-                            serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
-                        } else {
-                            "[]".to_string()
                         }
-                    };
+                        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+                    } else {
+                        "[]".to_string()
+                    }
+                };
 
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1113,6 +1190,13 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{{\"status\":\"broadcasted\"}}",
                     cors_headers
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/jsqr.min.js" {
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/javascript; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    JSQR_JS.len(),
+                    JSQR_JS
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else {

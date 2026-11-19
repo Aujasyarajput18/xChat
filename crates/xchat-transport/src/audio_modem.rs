@@ -141,8 +141,7 @@ impl AudioCallModem {
 
         // Reconstruct bytes from bits
         let mut bytes = Vec::new();
-        #[allow(clippy::chunks_exact_to_as_chunks)]
-        for chunk in bits.chunks_exact(8) {
+        for chunk in bits.as_chunks::<8>().0 {
             let mut byte = 0u8;
             for &b in chunk {
                 byte = (byte << 1) | b;
