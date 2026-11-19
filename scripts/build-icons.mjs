@@ -54,34 +54,7 @@ export function buildSprite(icons = Object.keys(ICON_DEFINITIONS)) {
     return `  <symbol id="i-${name}" viewBox="0 0 24 24">${body}</symbol>`;
   }).join('\n');
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;" aria-hidden="true">
-  <defs>
-    <linearGradient id="holo-cyan" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
-      <stop offset="0%" stop-color="#7dd3fc"/>
-      <stop offset="50%" stop-color="#38bdf8"/>
-      <stop offset="100%" stop-color="#0284c7"/>
-    </linearGradient>
-    <linearGradient id="holo-mint" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
-      <stop offset="0%" stop-color="#a7f3d0"/>
-      <stop offset="50%" stop-color="#5eead0"/>
-      <stop offset="100%" stop-color="#0d9488"/>
-    </linearGradient>
-    <linearGradient id="holo-amber" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
-      <stop offset="0%" stop-color="#fde68a"/>
-      <stop offset="50%" stop-color="#ffc857"/>
-      <stop offset="100%" stop-color="#d97706"/>
-    </linearGradient>
-    <linearGradient id="holo-coral" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
-      <stop offset="0%" stop-color="#fca5a5"/>
-      <stop offset="50%" stop-color="#ff6b6b"/>
-      <stop offset="100%" stop-color="#dc2626"/>
-    </linearGradient>
-    <linearGradient id="holo-violet" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
-      <stop offset="0%" stop-color="#c4b5fd"/>
-      <stop offset="50%" stop-color="#a78bfa"/>
-      <stop offset="100%" stop-color="#7c3aed"/>
-    </linearGradient>
-  </defs>
+  return `<svg style="display:none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
 ${symbols}
 </svg>`;
 }

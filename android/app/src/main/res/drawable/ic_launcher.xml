@@ -1,43 +1,6 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path
-        android:fillColor="#090D16"
-        android:pathData="M0,0h108v108h-108z"/>
-    <!-- Logo Option A: Holo Hex Mesh -->
-    <!-- Outer Hexagon -->
-    <path
-        android:pathData="M54,16 L84,32 L84,68 L54,88 L24,68 L24,32 Z"
-        android:strokeColor="#5EEAD0"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"/>
-    <!-- Inner X Mesh -->
-    <path
-        android:pathData="M40,40 L68,68 M68,40 L40,68"
-        android:strokeColor="#38BDF8"
-        android:strokeWidth="2.5"
-        android:strokeLineCap="round"/>
-    <!-- Center Ring -->
-    <path
-        android:pathData="M54,49 A5,5 0 1,1 54,59 A5,5 0 1,1 54,49 Z"
-        android:strokeColor="#5EEAD0"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"/>
-    <!-- 4 Mesh Node Points -->
-    <path
-        android:fillColor="#7DD3FC"
-        android:pathData="M40,40 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0"/>
-    <path
-        android:fillColor="#7DD3FC"
-        android:pathData="M68,40 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0"/>
-    <path
-        android:fillColor="#5EEAD0"
-        android:pathData="M40,68 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0"/>
-    <path
-        android:fillColor="#5EEAD0"
-        android:pathData="M68,68 m-3.4,0 a3.4,3.4 0 1,0 6.8,0 a3.4,3.4 0 1,0 -6.8,0"/>
-</vector>
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+    <monochrome android:drawable="@drawable/ic_launcher_monochrome"/>
+</adaptive-icon>
