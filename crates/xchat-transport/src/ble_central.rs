@@ -351,6 +351,7 @@ impl BleCentralTransport {
                         let inbound_json_tx = self.inbound_json_tx.clone();
                         let peer_id_clone = peer_id.clone();
                         let discovered_devices = self.discovered_devices.clone();
+                        let connected_peers = self.connected_peers.clone();
 
                         tokio::spawn(async move {
                             let mut reassembler = BleReassembler::new();
@@ -372,10 +373,34 @@ impl BleCentralTransport {
                                             if let Ok(json_val) =
                                                 serde_json::from_str::<serde_json::Value>(&json_str)
                                             {
+                                                let sender_opt = json_val["sender"]
+                                                    .as_str()
+                                                    .or_else(|| json_val["address"].as_str())
+                                                    .or_else(|| json_val["sender_address"].as_str());
                                                 let uname_opt = json_val["username"]
                                                     .as_str()
                                                     .or_else(|| json_val["sender_alias"].as_str())
                                                     .or_else(|| json_val["alias"].as_str());
+
+                                                if let Some(cp) = {
+                                                    let peers = connected_peers.lock().await;
+                                                    peers.get(&peer_id_clone).cloned()
+                                                } {
+                                                    let mut peers = connected_peers.lock().await;
+                                                    if let Some(s) = sender_opt {
+                                                        peers.insert(s.to_string(), cp.clone());
+                                                    }
+                                                    if let Some(u) = uname_opt {
+                                                        let fmt = if u.starts_with('@') {
+                                                            u.to_string()
+                                                        } else {
+                                                            format!("@{}", u)
+                                                        };
+                                                        peers.insert(fmt.clone(), cp.clone());
+                                                        peers.insert(fmt.to_lowercase(), cp.clone());
+                                                    }
+                                                }
+
                                                 if let Some(uname) = uname_opt {
                                                     if let Ok(mut lock) = discovered_devices.lock()
                                                     {

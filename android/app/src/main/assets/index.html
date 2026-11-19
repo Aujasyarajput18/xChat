@@ -3382,7 +3382,6 @@ async function init() {
     updateProfileHeaderBadge();
     SoundFX.updateUi();
     updateQrDisplay();
-    renderNearbyRadar(fetchDiscoveredPeers());
     renderEmojiGrid(0);
 
     const profileBody = document.getElementById('profileDetailsBody');
@@ -3437,7 +3436,10 @@ window.onNearbyPeersUpdated = async function() {
 };
 
 function renderNearbyRadar(peers) {
-    peers = peers || [];
+    if (!peers || typeof peers.then === 'function' || !Array.isArray(peers)) return;
+    if (myIdentity && (myIdentity.username || myIdentity.address)) {
+        peers = peers.filter(p => p && p.username !== myIdentity.username && p.address !== myIdentity.address && p.fingerprint !== myIdentity.fingerprint);
+    }
     const countBadge = document.getElementById('radarCountBadge');
     const row = document.getElementById('radarPeersRow');
     if (!row) return;
@@ -3493,6 +3495,13 @@ function connectToDiscoveredPeer(peer) {
         contact.status = statusLabel;
     }
     Storage.set('contacts', JSON.stringify(contacts));
+    if (!isNative) {
+        fetch(API_BASE + '/api/contacts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(contact)
+        }).catch(() => {});
+    }
     renderContacts();
     selectContact(contact);
     showToast(STRINGS.toastConnectedTo(u));
@@ -3866,7 +3875,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
         SoundFX.playReceive();
         renderContacts();
 
-        if (activeContact && (activeContact.alias === contact.alias || (activeContact.target && activeContact.target.startsWith('ble:')))) {
+        if (!activeContact || activeContact.alias === 'Saved Messages' || activeContact.alias === contact.alias || (activeContact.target && activeContact.target.startsWith('ble:'))) {
             activeContact = contact;
             renderMessages();
         }
@@ -3874,6 +3883,37 @@ window.onIncomingNetworkMessage = function(rawJson) {
 };
 
 async function pollServerMessages() {
+    try {
+        const cRes = await fetch(API_BASE + '/api/contacts');
+        if (cRes.ok) {
+            const srvContacts = await cRes.json();
+            if (Array.isArray(srvContacts) && srvContacts.length > 0) {
+                let contactsChanged = false;
+                srvContacts.forEach(sc => {
+                    const idx = contacts.findIndex(c => c.alias === sc.alias || (c.address && c.address === sc.address));
+                    if (idx === -1) {
+                        contacts.push(sc);
+                        contactsChanged = true;
+                        if (!activeContact || activeContact.alias === 'Saved Messages') {
+                            activeContact = sc;
+                        }
+                    } else {
+                        if (contacts[idx].last_message !== sc.last_message || contacts[idx].last_time !== sc.last_time || contacts[idx].status !== sc.status) {
+                            contacts[idx].last_message = sc.last_message;
+                            contacts[idx].last_time = sc.last_time;
+                            contacts[idx].status = sc.status;
+                            contactsChanged = true;
+                        }
+                    }
+                });
+                if (contactsChanged) {
+                    Storage.set('contacts', JSON.stringify(contacts));
+                    renderContacts();
+                }
+            }
+        }
+    } catch(e) {}
+
     if (!activeContact) return;
     try {
         const res = await fetch(API_BASE + '/api/messages?peer=' + encodeURIComponent(activeContact.alias));
@@ -4167,44 +4207,67 @@ async function startQrScanner() {
     if (status) status.innerText = 'Initializing camera…';
 
     try {
+        let stream = null;
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            qrScannerStream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: { ideal: 'environment' } }
+                });
+            } catch(e1) {
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                } catch(e2) {
+                    console.warn("Camera fallback failed:", e2);
+                }
+            }
+        } else if (navigator.getUserMedia) {
+            stream = await new Promise((resolve, reject) => {
+                navigator.getUserMedia({ video: true }, resolve, reject);
             });
-            if (video) {
-                video.srcObject = qrScannerStream;
+        }
+
+        if (stream && video) {
+            qrScannerStream = stream;
+            video.srcObject = qrScannerStream;
+            try {
                 await video.play();
+            } catch(pe) {
+                console.warn("Video play exception:", pe);
+            }
 
-                if (!scanCanvas) {
-                    scanCanvas = document.createElement('canvas');
-                    scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
-                }
+            if (!scanCanvas) {
+                scanCanvas = document.createElement('canvas');
+                scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+            }
 
-                if (qrScannerInterval) {
-                    clearInterval(qrScannerInterval);
-                }
+            if (qrScannerInterval) {
+                clearInterval(qrScannerInterval);
+            }
 
-                qrScannerInterval = setInterval(() => {
-                    try {
-                        if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
-                            scanCanvas.width = video.videoWidth;
-                            scanCanvas.height = video.videoHeight;
-                            scanCtx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
-                            const imgData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+            qrScannerInterval = setInterval(() => {
+                try {
+                    if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+                        scanCanvas.width = video.videoWidth;
+                        scanCanvas.height = video.videoHeight;
+                        scanCtx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+                        const imgData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
 
-                            if (typeof jsQR !== 'undefined') {
-                                const code = jsQR(imgData.data, imgData.width, imgData.height, {
-                                    inversionAttempts: "attemptBoth"
-                                });
-                                if (code && code.data && code.data.trim().length > 0) {
-                                    onQrCodeDetected(code.data.trim());
-                                }
+                        const qrDecoder = (typeof jsQR !== 'undefined') ? jsQR : (typeof window !== 'undefined' ? window.jsQR : null);
+                        if (qrDecoder) {
+                            const code = qrDecoder(imgData.data, imgData.width, imgData.height, {
+                                inversionAttempts: "attemptBoth"
+                            });
+                            if (code && code.data && code.data.trim().length > 0) {
+                                onQrCodeDetected(code.data.trim());
                             }
                         }
-                    } catch(e) {}
-                }, 200);
-            }
+                    }
+                } catch(e) {}
+            }, 200);
+
             if (status) status.innerText = 'Align QR badge within frame…';
+        } else {
+            if (status) status.innerText = 'Camera unavailable. Use image upload below.';
         }
     } catch(e) {
         if (status) status.innerText = 'Camera unavailable. Use image upload below.';
@@ -4307,6 +4370,13 @@ function onQrCodeDetected(rawData) {
     }
 
     Storage.set('contacts', JSON.stringify(contacts));
+    if (!isNative) {
+        fetch(API_BASE + '/api/contacts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(existing)
+        }).catch(() => {});
+    }
     renderContacts();
     selectContact(existing);
 

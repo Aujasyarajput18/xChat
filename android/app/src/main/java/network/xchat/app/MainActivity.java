@@ -86,7 +86,14 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPermissionRequest(final android.webkit.PermissionRequest request) {
-                request.grant(request.getResources());
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            request.grant(request.getResources());
+                        } catch (Exception ignored) {}
+                    }
+                });
             }
 
             @Override
