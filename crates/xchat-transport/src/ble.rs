@@ -78,18 +78,14 @@ impl BleChunker {
             return vec![header.serialize().to_vec()];
         }
 
-        let total_chunks = (payload.len() + max_chunk_payload - 1) / max_chunk_payload;
+        let total_chunks = payload.len().div_ceil(max_chunk_payload);
         let total_chunks_u16 = total_chunks.min(u16::MAX as usize) as u16;
 
         let mut chunks = Vec::with_capacity(total_chunks);
 
         for (idx, slice) in payload.chunks(max_chunk_payload).enumerate() {
-            let header = BleFrameHeader::new(
-                msg_id,
-                idx as u16,
-                total_chunks_u16,
-                slice.len() as u16,
-            );
+            let header =
+                BleFrameHeader::new(msg_id, idx as u16, total_chunks_u16, slice.len() as u16);
             let mut packet = Vec::with_capacity(BLE_HEADER_LEN + slice.len());
             packet.extend_from_slice(&header.serialize());
             packet.extend_from_slice(slice);
@@ -132,7 +128,8 @@ impl BleReassembler {
             .as_secs();
 
         // Prune stale incomplete transfers older than MAX_INCOMPLETE_AGE_SECS
-        self.pending.retain(|_, v| now.saturating_sub(v.first_seen) < MAX_INCOMPLETE_AGE_SECS);
+        self.pending
+            .retain(|_, v| now.saturating_sub(v.first_seen) < MAX_INCOMPLETE_AGE_SECS);
 
         let entry = self
             .pending
