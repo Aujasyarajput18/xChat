@@ -71,8 +71,8 @@
   --radius-lg: 20px;
   --radius-pill: 9999px;
 
-  --shadow-low: 0 2px 8px rgba(0, 0, 0, 0.3);
-  --shadow-high: 0 8px 32px rgba(0, 0, 0, 0.6);
+  --shadow-low: none;
+  --shadow-high: none;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -442,12 +442,11 @@ header {
   background: var(--bg-raised);
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-high);
+  box-shadow: none;
   display: none;
   flex-direction: column;
   padding: var(--space-1);
   z-index: 100;
-  backdrop-filter: blur(12px);
 }
 
 .dropdown-menu.active {
@@ -603,7 +602,6 @@ header {
 .radar-peer-bubble:hover {
   border-color: var(--holo-cyan);
   background: rgba(94, 231, 240, 0.08);
-  box-shadow: 0 0 8px var(--glow-cyan);
 }
 
 .radar-peer-avatar {
@@ -648,7 +646,6 @@ header {
 
 .search-box:focus-within {
   border-color: var(--border-focus);
-  box-shadow: 0 0 8px var(--glow-cyan);
 }
 
 .search-input {
@@ -712,7 +709,6 @@ header {
 .contact-card.active, .contact-squircle-card.active {
   background: rgba(94, 231, 240, 0.08);
   border-color: var(--holo-cyan);
-  box-shadow: 0 0 10px rgba(94, 231, 240, 0.2);
 }
 
 .contact-avatar, .contact-avatar-squircle {
@@ -738,7 +734,6 @@ header {
   background: var(--holo-mint);
   border: 2px solid var(--bg-surface);
   border-radius: 50%;
-  box-shadow: 0 0 6px var(--glow-mint);
 }
 
 .contact-meta, .contact-meta-col {
@@ -1491,7 +1486,6 @@ details.expander[open] {
 
 .input-box:focus {
   border-color: var(--border-focus);
-  box-shadow: 0 0 10px var(--glow-cyan);
 }
 
 .input-box::placeholder {
@@ -1507,18 +1501,16 @@ details.expander[open] {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 12px var(--glow-cyan);
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out);
   flex-shrink: 0;
 }
 
 .btn-send:hover {
-  transform: scale(1.06);
-  box-shadow: 0 0 16px var(--glow-cyan);
+  background: color-mix(in srgb, var(--tile-cyan), #ffffff 6%);
 }
 
 .btn-send:active {
-  transform: scale(0.96);
+  background: color-mix(in srgb, var(--tile-cyan), #000000 8%);
 }
 
 /* Emoji Drawer */
@@ -1582,8 +1574,7 @@ details.expander[open] {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.75);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.6);
   display: none;
   align-items: center;
   justify-content: center;
@@ -1603,7 +1594,6 @@ details.expander[open] {
   border: 1px solid var(--border-hairline);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
-  box-shadow: var(--shadow-high);
   position: relative;
   max-height: 90vh;
   overflow-y: auto;
@@ -1677,8 +1667,7 @@ details.expander[open] {
 }
 
 .form-input.invalid {
-  border-color: var(--holo-coral);
-  box-shadow: 0 0 8px var(--glow-coral);
+  border-color: var(--tile-coral);
 }
 
 .form-hint {
@@ -1718,8 +1707,7 @@ details.expander[open] {
   left: 0;
   right: 0;
   height: 2px;
-  background: var(--holo-cyan);
-  box-shadow: 0 0 10px var(--glow-cyan);
+  background: var(--tile-cyan);
   animation: scanLaser 2s ease-in-out infinite alternate;
 }
 
@@ -1801,8 +1789,7 @@ details.expander[open] {
 .sos-guard-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(10, 14, 19, 0.92);
-  backdrop-filter: blur(16px);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1825,26 +1812,12 @@ details.expander[open] {
   width: 100px;
   height: 100px;
   border-radius: 50%;
-  background: rgba(255, 107, 107, 0.08);
-  border: 2px solid rgba(255, 107, 107, 0.25);
+  background: var(--surface);
+  border: 3px solid var(--tile-coral);
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
-  box-shadow: 0 0 20px rgba(255, 107, 107, 0.2);
-}
-
-.sos-ring::before {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  padding: 3px;
-  background: conic-gradient(var(--holo-coral) calc(var(--sos-progress, 0) * 360deg), transparent 0deg);
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
 }
 
 .sos-guard-title {
@@ -1867,14 +1840,13 @@ details.expander[open] {
   color: #FFFFFF;
   font-weight: 700;
   font-size: var(--text-md);
-  box-shadow: 0 0 16px var(--glow-coral);
-  transition: transform var(--duration-fast);
   user-select: none;
   -webkit-user-select: none;
+  transition: background var(--duration-fast);
 }
 
 .sos-hold-btn:active {
-  transform: scale(0.97);
+  background: color-mix(in srgb, var(--tile-coral), #000000 8%);
 }
 
 /* ==================== TOAST NOTIFICATIONS ==================== */
@@ -1899,7 +1871,6 @@ details.expander[open] {
   border-radius: var(--radius-pill);
   font-size: var(--text-sm);
   font-weight: 500;
-  box-shadow: var(--shadow-high);
   opacity: 0;
   transform: translateY(10px);
   transition: all var(--duration-normal) var(--ease-out);
@@ -2467,7 +2438,7 @@ details.expander[open] {
     </div>
 
     <div style="position:relative; margin:14px auto 10px; width:260px; height:260px;">
-      <canvas id="designerQrCanvas" style="width:260px; height:260px; border-radius:20px; background:#080808; border:1px solid var(--border-hairline); box-shadow:0 8px 32px rgba(94,231,240,0.1);"></canvas>
+      <canvas id="designerQrCanvas" style="width:260px; height:260px; border-radius:20px; background:#080808; border:1px solid var(--border-hairline); "></canvas>
     </div>
 
     <div style="display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:6px;">
@@ -2528,7 +2499,7 @@ details.expander[open] {
     <h2 class="modal-title" style="justify-content:center"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-shield-check" xlink:href="#i-shield-check"/></svg> Safety Code Verification</h2>
     <p class="modal-desc">Compare these 6 emoji symbols with <strong id="safetyPeerName" style="color:var(--text-1);">Peer</strong> out-of-band to mathematically verify encryption integrity.</p>
 
-    <div style="background:var(--bg-input); border:1px solid var(--border-hairline); border-radius:var(--radius-lg); padding:18px 12px; margin:16px 0; box-shadow:0 8px 30px rgba(0,0,0,0.5);">
+    <div style="background:var(--bg-input); border:1px solid var(--border-hairline); border-radius:var(--radius-lg); padding:18px 12px; margin:16px 0; ">
       <div style="font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--holo-cyan); margin-bottom:8px; font-weight:700;">Deterministic Emoji Safety Blocks</div>
       <div id="safetyEmojiDisplay" class="font-mono" style="font-size:26px; letter-spacing:8px; margin:10px 0; user-select:text;">
         🔒 🌸 ⚡ 🐬 💎 🪐
@@ -2565,11 +2536,11 @@ details.expander[open] {
           <button type="button" onclick="createNewIdentity()" class="btn-action btn-ghost btn-sm" style="font-size:10px; padding:2px 6px;"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-key-round" xlink:href="#i-key-round"/></svg> Fresh Keys</button>
         </div>
         <div style="display:flex; gap:8px;">
-          <div class="swatch-btn" onclick="selectAvatarColor(0)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #d4c4fb, #b8a0f8); cursor:pointer;"></div>
-          <div class="swatch-btn" onclick="selectAvatarColor(1)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #d2e8b8, #b6d994); cursor:pointer;"></div>
-          <div class="swatch-btn" onclick="selectAvatarColor(2)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #fcd34d, #f59e0b); cursor:pointer;"></div>
-          <div class="swatch-btn" onclick="selectAvatarColor(3)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #93c5fd, #60a5fa); cursor:pointer;"></div>
-          <div class="swatch-btn" onclick="selectAvatarColor(4)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #f472b6, #ec4899); cursor:pointer;"></div>
+          <div class="swatch-btn" onclick="selectAvatarColor(0)" style="width:22px; height:22px; border-radius:6px; background:#8FD3F0; cursor:pointer;"></div>
+          <div class="swatch-btn" onclick="selectAvatarColor(1)" style="width:22px; height:22px; border-radius:6px; background:#8EE3CC; cursor:pointer;"></div>
+          <div class="swatch-btn" onclick="selectAvatarColor(2)" style="width:22px; height:22px; border-radius:6px; background:#F2D08A; cursor:pointer;"></div>
+          <div class="swatch-btn" onclick="selectAvatarColor(3)" style="width:22px; height:22px; border-radius:6px; background:#F2A7A3; cursor:pointer;"></div>
+          <div class="swatch-btn" onclick="selectAvatarColor(4)" style="width:22px; height:22px; border-radius:6px; background:#C3B6F7; cursor:pointer;"></div>
         </div>
       </div>
     </div>
@@ -2835,13 +2806,8 @@ if (typeof jsQR === 'undefined' && typeof window !== 'undefined' && window.jsQR)
                 return;
             }
 
-            // Diagonal High-Contrast Gradient for Designer Dark Mode
-            var grad = ctx.createLinearGradient(margin, margin, size - margin, size - margin);
-            grad.addColorStop(0, "#ffffff");
-            grad.addColorStop(0.35, "#e8deff");
-            grad.addColorStop(0.7, "#cde4ff");
-            grad.addColorStop(1, "#dcf4cb");
-            ctx.fillStyle = grad;
+            // Solid High-Contrast Fill for Designer Dark Mode
+            ctx.fillStyle = "#E6EEF5";
 
             // Full-fill squircle modules (seamlessly connected when adjacent, high contrast & scannable)
             var squircleRad = Math.max(1, cellSize * 0.22);
@@ -2888,14 +2854,12 @@ if (typeof jsQR === 'undefined' && typeof window !== 'undefined' && window.jsQR)
             drawFinderEye(0, moduleCount - 7, "#cde4ff");
             drawFinderEye(moduleCount - 7, 0, "#dcf4cb");
 
-            // Central Glowing Emblem (Exact 5x5 masked area)
+            // Central Emblem (Exact 5x5 masked area)
             var badgeModuleW = emblemModules * cellSize;
             var badgeX = margin + centerStart * cellSize;
             var badgeY = badgeX;
 
             ctx.save();
-            ctx.shadowColor = "rgba(212, 196, 251, 0.5)";
-            ctx.shadowBlur = 10;
             ctx.fillStyle = "#0c0c0c";
             ctx.beginPath();
             if (ctx.roundRect) {
@@ -3028,11 +2992,20 @@ const SoundFX = {
 };
 
 const AVATAR_PALETTE = [
-    'linear-gradient(135deg, #d4c4fb, #b8a0f8)',
-    'linear-gradient(135deg, #d2e8b8, #b6d994)',
-    'linear-gradient(135deg, #fcd34d, #f59e0b)',
-    'linear-gradient(135deg, #93c5fd, #60a5fa)',
-    'linear-gradient(135deg, #f472b6, #ec4899)'
+    '#8FD3F0',
+    '#8EE3CC',
+    '#F2D08A',
+    '#F2A7A3',
+    '#C3B6F7',
+    '#A9B4BF'
+];
+const AVATAR_INK_PALETTE = [
+    '#062F43',
+    '#05362B',
+    '#422C04',
+    '#4A1212',
+    '#2A1C59',
+    '#1B232B'
 ];
 
 function getAvatarBg(str) {
@@ -3194,7 +3167,7 @@ async function updateStatusChip() {
             if (labelSpan) labelSpan.textContent = 'Wi-Fi / LAN';
             if (dot) {
                 dot.style.background = 'var(--holo-mint)';
-                dot.style.boxShadow = '0 0 6px var(--glow-mint)';
+                dot.style.boxShadow = 'none';
             }
         } else {
             setOfflineStatus(chip);
