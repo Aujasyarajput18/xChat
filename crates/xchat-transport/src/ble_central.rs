@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         atomic::{AtomicBool, AtomicU16, Ordering},
         Arc, Mutex,
@@ -55,6 +55,7 @@ pub struct BleCentralTransport {
     adapter: Option<Adapter>,
     discovered_devices: Arc<Mutex<HashMap<String, DiscoveredBleDevice>>>,
     connected_peers: Arc<TokioMutex<HashMap<String, ConnectedPeer>>>,
+    connecting_peers: Arc<TokioMutex<HashSet<String>>>,
     inbound_tx: mpsc::Sender<EncryptedEnvelope>,
     inbound_rx: TokioMutex<mpsc::Receiver<EncryptedEnvelope>>,
     inbound_json_tx: mpsc::Sender<String>,
@@ -70,6 +71,7 @@ impl BleCentralTransport {
         let is_available = Arc::new(AtomicBool::new(false));
         let discovered_devices = Arc::new(Mutex::new(HashMap::new()));
         let connected_peers = Arc::new(TokioMutex::new(HashMap::new()));
+        let connecting_peers = Arc::new(TokioMutex::new(HashSet::new()));
         let msg_id_counter = Arc::new(AtomicU16::new(1));
         let local_identity = Arc::new(Mutex::new(None));
 
@@ -99,6 +101,7 @@ impl BleCentralTransport {
             adapter,
             discovered_devices,
             connected_peers,
+            connecting_peers,
             inbound_tx,
             inbound_rx: TokioMutex::new(inbound_rx),
             inbound_json_tx,
@@ -165,7 +168,7 @@ impl BleCentralTransport {
                         continue;
                     };
 
-                    let is_xchat = props.services.iter().any(|s| *s == BLE_SERVICE_UUID);
+                    let is_xchat = props.services.contains(&BLE_SERVICE_UUID);
                     let name = props.local_name.clone().unwrap_or_default();
                     if !is_xchat
                         && !name.contains("Nothing")
@@ -203,15 +206,20 @@ impl BleCentralTransport {
                     matching_peripherals.push((peripheral, id_str, rssi));
                 }
 
-                matching_peripherals.sort_by(|a, b| b.2.cmp(&a.2));
+                matching_peripherals.sort_by_key(|a| std::cmp::Reverse(a.2));
 
                 if let Some((freshest_p, freshest_id, _)) = matching_peripherals.first() {
-                    let already_connected = {
-                        let lock = self.connected_peers.lock().await;
-                        lock.contains_key(freshest_id)
+                    let should_connect = {
+                        let connecting = self.connecting_peers.lock().await;
+                        let connected = self.connected_peers.lock().await;
+                        !connecting.contains(freshest_id) && !connected.contains_key(freshest_id)
                     };
 
-                    if !already_connected {
+                    if should_connect {
+                        self.connecting_peers
+                            .lock()
+                            .await
+                            .insert(freshest_id.clone());
                         let transport_clone = self.clone();
                         let p = freshest_p.clone();
                         let id = freshest_id.clone();
@@ -225,6 +233,25 @@ impl BleCentralTransport {
     }
 
     async fn connect_peer(self: Arc<Self>, peripheral: Peripheral, peer_id: String) {
+        // Ensure peer_id is removed from connecting_peers when connect_peer terminates
+        struct ConnectingGuard {
+            set: Arc<TokioMutex<HashSet<String>>>,
+            id: String,
+        }
+        impl Drop for ConnectingGuard {
+            fn drop(&mut self) {
+                let set = self.set.clone();
+                let id = self.id.clone();
+                tokio::spawn(async move {
+                    set.lock().await.remove(&id);
+                });
+            }
+        }
+        let _guard = ConnectingGuard {
+            set: self.connecting_peers.clone(),
+            id: peer_id.clone(),
+        };
+
         let connect_res = tokio::time::timeout(Duration::from_secs(4), peripheral.connect()).await;
         match connect_res {
             Ok(Ok(_)) => {
@@ -254,6 +281,7 @@ impl BleCentralTransport {
         let chars = peripheral.characteristics();
         let rx_char = chars.iter().find(|c| c.uuid == BLE_RX_CHAR_UUID).cloned();
         let tx_char = chars.iter().find(|c| c.uuid == BLE_TX_CHAR_UUID).cloned();
+        let info_char = chars.iter().find(|c| c.uuid == BLE_INFO_CHAR_UUID).cloned();
 
         let Some(rx_char) = rx_char else {
             debug!("Peer {} does not have xChat RX characteristic", peer_id);
@@ -261,82 +289,157 @@ impl BleCentralTransport {
             return;
         };
 
-        if let Some(ref tx) = tx_char {
-            if let Err(e) = peripheral.subscribe(tx).await {
-                warn!(
-                    "Failed to subscribe to TX notifications on {}: {}",
-                    peer_id, e
-                );
-            } else {
-                let p_clone = peripheral.clone();
-                let inbound_tx = self.inbound_tx.clone();
-                let inbound_json_tx = self.inbound_json_tx.clone();
-                let peer_id_clone = peer_id.clone();
-                let discovered_devices = self.discovered_devices.clone();
-
-                tokio::spawn(async move {
-                    if let Ok(mut stream) = p_clone.notifications().await {
-                        let mut reassembler = BleReassembler::new();
-                        while let Some(notif) = stream.next().await {
-                            match reassembler.process_packet(&notif.value) {
-                                Ok(Some(assembled_bytes)) => {
-                                    info!(
-                                        "Received full reassembled BLE envelope from {} ({} bytes)",
-                                        peer_id_clone,
-                                        assembled_bytes.len()
-                                    );
-                                    if let Ok(json_str) = String::from_utf8(assembled_bytes.clone())
-                                    {
-                                        // Update discovered_devices with actual peer username
-                                        if let Ok(json_val) =
-                                            serde_json::from_str::<serde_json::Value>(&json_str)
-                                        {
-                                            let uname_opt = json_val["username"]
-                                                .as_str()
-                                                .or_else(|| json_val["sender_alias"].as_str())
-                                                .or_else(|| json_val["alias"].as_str());
-                                            if let Some(uname) = uname_opt {
-                                                if let Ok(mut lock) = discovered_devices.lock() {
-                                                    if let Some(dev) = lock.get_mut(&peer_id_clone)
-                                                    {
-                                                        dev.username =
-                                                            Some(if uname.starts_with('@') {
-                                                                uname.to_string()
-                                                            } else {
-                                                                format!("@{}", uname)
-                                                            });
-                                                        if let Some(dname) =
-                                                            json_val["display_name"].as_str()
-                                                        {
-                                                            dev.name = dname.to_string();
-                                                        }
-                                                    }
-                                                }
-                                            }
+        // If peripheral exposes identity info characteristic, read it right away!
+        if let Some(ref ic) = info_char {
+            match peripheral.read(ic).await {
+                Ok(info_bytes) => {
+                    if let Ok(info_str) = String::from_utf8(info_bytes) {
+                        debug!("Read INFO_CHAR from {}: {}", peer_id, info_str);
+                        if let Ok(info_json) = serde_json::from_str::<serde_json::Value>(&info_str)
+                        {
+                            let uname_opt = info_json["username"]
+                                .as_str()
+                                .or_else(|| info_json["sender_alias"].as_str())
+                                .or_else(|| info_json["alias"].as_str());
+                            if let Some(uname) = uname_opt {
+                                let formatted = if uname.starts_with('@') {
+                                    uname.to_string()
+                                } else {
+                                    format!("@{}", uname)
+                                };
+                                if let Ok(mut lock) = self.discovered_devices.lock() {
+                                    if let Some(dev) = lock.get_mut(&peer_id) {
+                                        dev.username = Some(formatted.clone());
+                                        if let Some(dname) = info_json["display_name"].as_str() {
+                                            dev.name = dname.to_string();
                                         }
-                                        let _ = inbound_json_tx.send(json_str).await;
                                     }
-                                    if let Ok(env) =
-                                        bincode::deserialize::<EncryptedEnvelope>(&assembled_bytes)
-                                    {
-                                        let _ = inbound_tx.send(env).await;
-                                    } else if let Ok(env) =
-                                        serde_json::from_slice::<EncryptedEnvelope>(
-                                            &assembled_bytes,
-                                        )
-                                    {
-                                        let _ = inbound_tx.send(env).await;
-                                    }
-                                }
-                                Ok(None) => {}
-                                Err(err) => {
-                                    warn!("BLE chunk reassembly error: {:?}", err);
                                 }
                             }
                         }
                     }
-                });
+                }
+                Err(e) => {
+                    debug!("Could not read INFO_CHAR from {}: {}", peer_id, e);
+                }
             }
+        }
+
+        let mut tx_subscribed = false;
+        if let Some(ref tx) = tx_char {
+            match peripheral.notifications().await {
+                Ok(mut stream) => {
+                    for attempt in 1..=4 {
+                        match peripheral.subscribe(tx).await {
+                            Ok(_) => {
+                                tx_subscribed = true;
+                                info!("Successfully subscribed to TX notifications on {} (attempt {})", peer_id, attempt);
+                                break;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Subscribe attempt {} on {} failed: {}. Retrying in 200ms...",
+                                    attempt, peer_id, e
+                                );
+                                tokio::time::sleep(Duration::from_millis(200)).await;
+                            }
+                        }
+                    }
+
+                    if tx_subscribed {
+                        let inbound_tx = self.inbound_tx.clone();
+                        let inbound_json_tx = self.inbound_json_tx.clone();
+                        let peer_id_clone = peer_id.clone();
+                        let discovered_devices = self.discovered_devices.clone();
+
+                        tokio::spawn(async move {
+                            let mut reassembler = BleReassembler::new();
+                            while let Some(notif) = stream.next().await {
+                                match reassembler.process_packet(&notif.value) {
+                                    Ok(Some(assembled_bytes)) => {
+                                        info!(
+                                            "Received full reassembled BLE envelope from {} ({} bytes)",
+                                            peer_id_clone,
+                                            assembled_bytes.len()
+                                        );
+                                        if let Ok(json_str) =
+                                            String::from_utf8(assembled_bytes.clone())
+                                        {
+                                            info!(
+                                                "BLE reassembled JSON received from {}: {}",
+                                                peer_id_clone, json_str
+                                            );
+                                            if let Ok(json_val) =
+                                                serde_json::from_str::<serde_json::Value>(&json_str)
+                                            {
+                                                let uname_opt = json_val["username"]
+                                                    .as_str()
+                                                    .or_else(|| json_val["sender_alias"].as_str())
+                                                    .or_else(|| json_val["alias"].as_str());
+                                                if let Some(uname) = uname_opt {
+                                                    if let Ok(mut lock) = discovered_devices.lock()
+                                                    {
+                                                        if let Some(dev) =
+                                                            lock.get_mut(&peer_id_clone)
+                                                        {
+                                                            dev.username =
+                                                                Some(if uname.starts_with('@') {
+                                                                    uname.to_string()
+                                                                } else {
+                                                                    format!("@{}", uname)
+                                                                });
+                                                            if let Some(dname) =
+                                                                json_val["display_name"].as_str()
+                                                            {
+                                                                dev.name = dname.to_string();
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            let _ = inbound_json_tx.send(json_str).await;
+                                        }
+                                        if let Ok(env) = bincode::deserialize::<EncryptedEnvelope>(
+                                            &assembled_bytes,
+                                        ) {
+                                            let _ = inbound_tx.send(env).await;
+                                        } else if let Ok(env) =
+                                            serde_json::from_slice::<EncryptedEnvelope>(
+                                                &assembled_bytes,
+                                            )
+                                        {
+                                            let _ = inbound_tx.send(env).await;
+                                        }
+                                    }
+                                    Ok(None) => {}
+                                    Err(err) => {
+                                        warn!(
+                                            "BLE chunk reassembly error from {}: {:?}",
+                                            peer_id_clone, err
+                                        );
+                                    }
+                                }
+                            }
+                            info!("BLE notification stream terminated for {}", peer_id_clone);
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to get notification stream for BLE peer {}: {}",
+                        peer_id, e
+                    );
+                }
+            }
+        }
+
+        if tx_char.is_some() && !tx_subscribed {
+            warn!(
+                "TX subscription failed on {}. Disconnecting to allow clean reconnect.",
+                peer_id
+            );
+            let _ = peripheral.disconnect().await;
+            return;
         }
 
         let connected_peer = ConnectedPeer {
@@ -399,10 +502,11 @@ impl BleCentralTransport {
                 if let Ok(peripherals) = adapter.peripherals().await {
                     for p in peripherals {
                         let pid = p.id().to_string();
-                        let is_match = pid == clean_id
-                            || p.properties().await.ok().flatten().map_or(false, |props| {
-                                props.services.iter().any(|s| *s == BLE_SERVICE_UUID)
-                            });
+                        let is_match =
+                            pid == clean_id
+                                || p.properties().await.ok().flatten().is_some_and(|props| {
+                                    props.services.contains(&BLE_SERVICE_UUID)
+                                });
                         if is_match {
                             if let Ok(Ok(_)) =
                                 tokio::time::timeout(Duration::from_secs(4), p.connect()).await

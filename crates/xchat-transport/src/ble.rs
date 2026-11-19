@@ -78,7 +78,7 @@ impl BleChunker {
             return vec![header.serialize().to_vec()];
         }
 
-        let total_chunks = (payload.len() + max_chunk_payload - 1) / max_chunk_payload;
+        let total_chunks = payload.len().div_ceil(max_chunk_payload);
         let total_chunks_u16 = total_chunks.min(u16::MAX as usize) as u16;
 
         let mut chunks = Vec::with_capacity(total_chunks);
