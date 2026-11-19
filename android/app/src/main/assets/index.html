@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>xChat — Decentralized Private Messenger</title>
+  <title>xChat — Private Messenger</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 108 108'%3E%3Crect width='108' height='108' rx='24' fill='%238FD3F0'/%3E%3Cg fill='none' stroke='%23062F43' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M54,18 L82,33 L82,67 L54,86 L26,67 L26,33 Z'/%3E%3Cpath d='M42,42 L66,66 M66,42 L42,66' stroke-width='6.5'/%3E%3C/g%3E%3Cg fill='%23062F43'%3E%3Ccircle cx='42' cy='42' r='5'/%3E%3Ccircle cx='66' cy='42' r='5'/%3E%3Ccircle cx='42' cy='66' r='5'/%3E%3Ccircle cx='66' cy='66' r='5'/%3E%3C/g%3E%3C/svg%3E">
   <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 108 108'%3E%3Crect width='108' height='108' rx='24' fill='%238FD3F0'/%3E%3Cg fill='none' stroke='%23062F43' stroke-width='7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M54,18 L82,33 L82,67 L54,86 L26,67 L26,33 Z'/%3E%3Cpath d='M42,42 L66,66 M66,42 L42,66' stroke-width='6.5'/%3E%3C/g%3E%3Cg fill='%23062F43'%3E%3Ccircle cx='42' cy='42' r='5'/%3E%3Ccircle cx='66' cy='42' r='5'/%3E%3Ccircle cx='42' cy='66' r='5'/%3E%3Ccircle cx='66' cy='66' r='5'/%3E%3C/g%3E%3C/svg%3E">
   <!-- Fully Offline: No CDN fonts or scripts loaded. System font stacks applied. -->
@@ -554,7 +554,7 @@ header {
   font-weight: 600;
 }
 
-/* Nearby Mesh Radar Carousel */
+/* People nearby Carousel */
 .radar-strip {
   padding: 10px 0 12px;
   border-bottom: 1px solid var(--border-hairline);
@@ -2014,14 +2014,14 @@ details.expander[open] {
     </span>
     <button class="status-chip" id="meshStatusLabel" onclick="switchTab('carrier')" aria-label="Connection status">
       <span class="pulse-dot"></span>
-      <span>Wi-Fi / LAN</span>
+      <span>Connected</span>
     </button>
   </div>
   <div class="header-actions">
     <button class="sos-header-btn" onclick="openSosGuard()" aria-label="Emergency SOS" title="Emergency SOS">
       <svg class="ico ico-sm ico--coral" aria-hidden="true"><use href="#i-siren" xlink:href="#i-siren"/></svg>
     </button>
-    <button class="action-circle-btn" id="soundToggleBtn" onclick="SoundFX.toggleMute()" title="Toggle Sound Chimes" aria-label="Toggle sound chimes">
+    <button class="action-circle-btn" id="soundToggleBtn" onclick="SoundFX.toggleMute()" title="Mute sounds" aria-label="Mute sounds">
       <svg id="soundOnIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
       <svg id="soundOffIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="display:none; color:var(--text-3);"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
     </button>
@@ -2033,13 +2033,13 @@ details.expander[open] {
     </button>
     <div class="dropdown-menu" id="topMenuDropdown" role="menu">
       <button class="dropdown-item" role="menuitem" onclick="closeDropdown(); openModal('helpSheet');">
-        <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-circle-help" xlink:href="#i-circle-help"/></svg> Help &amp; Manual
+        <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-circle-help" xlink:href="#i-circle-help"/></svg> Help
       </button>
       <button class="dropdown-item" role="menuitem" onclick="closeDropdown(); openModal('aboutSheet');">
         <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-info" xlink:href="#i-info"/></svg> About xChat
       </button>
       <button class="dropdown-item" role="menuitem" onclick="closeDropdown(); switchTab('me');">
-        <svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-settings" xlink:href="#i-settings"/></svg> Identity &amp; Profile
+        <svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-settings" xlink:href="#i-settings"/></svg> My profile
       </button>
     </div>
   </div>
@@ -2053,46 +2053,46 @@ details.expander[open] {
     <div class="tab-pane active-tab" id="tabPaneChats">
       <div class="address-card">
         <div>
-          <div class="address-label">My address (IP:port)</div>
+          <div class="address-label">Your address</div>
           <div class="address-value font-mono" id="myReachableSocket">Loading…</div>
         </div>
-        <button class="btn-action btn-ghost btn-sm" onclick="copyMySocket()" aria-label="Copy my address">
+        <button class="btn-action btn-ghost btn-sm" onclick="copyMySocket()" aria-label="Copy your address">
           <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy" xlink:href="#i-copy"/></svg> Copy
         </button>
       </div>
 
-      <!-- Nearby Mesh Radar Carousel -->
+      <!-- People nearby Carousel -->
       <div class="radar-strip" id="radarStrip">
         <div class="radar-strip-header">
           <span class="radar-strip-title">
             <span class="pulse-dot" style="width:6px; height:6px;"></span>
-            Nearby Mesh Radar
+            People nearby
           </span>
-          <span id="radarCountBadge" class="font-mono" style="font-size:10px; color:var(--holo-mint)">0 online</span>
+          <span id="radarCountBadge" class="font-mono" style="font-size:10px; color:var(--holo-mint)">None found</span>
         </div>
         <div class="radar-carousel-row" id="radarPeersRow">
-          <div style="font-size:11px; color:var(--text-3); padding:4px 2px;">Scanning Wi-Fi &amp; radio peers…</div>
+          <div style="font-size:11px; color:var(--text-3); padding:4px 2px;">Looking for people nearby…</div>
         </div>
       </div>
       
       <div class="search-wrap">
         <div class="search-box">
           <svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-search" xlink:href="#i-search"/></svg>
-          <input type="text" class="search-input" id="searchFilter" placeholder="Search contacts (Ctrl+K)…" oninput="filterContacts()" aria-label="Search contacts">
+          <input type="text" class="search-input" id="searchFilter" placeholder="Search people or addresses" oninput="filterContacts()" aria-label="Search people or addresses">
         </div>
       </div>
       
-      <div class="list-header">Conversations</div>
+      <div class="list-header">Chats</div>
       <div class="contact-scroll" id="contactList"></div>
     </div>
 
     <!-- Tab 2: Network (Carrier) -->
     <div class="tab-pane" id="tabPaneCarrier">
       <div class="tab-pane-header">
-        <h2 class="tab-pane-title">Network</h2>
-        <span class="badge badge-working" id="networkOverviewBadge">LAN Active</span>
+        <h2 class="tab-pane-title">Ways to send</h2>
+        <span class="badge badge-working" id="networkOverviewBadge">Connected</span>
       </div>
-      <div class="tab-pane-desc">Available transports and offline network routing.</div>
+      <div class="tab-pane-desc">Choose how your messages travel when the usual network is down.</div>
       
       <div class="transport-scroll">
         <!-- Wi-Fi / Local Network -->
@@ -2101,8 +2101,8 @@ details.expander[open] {
             <svg class="ico" aria-hidden="true"><use href="#i-wifi" xlink:href="#i-wifi"/></svg>
           </div>
           <div class="transport-info">
-            <span class="transport-name">Wi-Fi / Local network</span>
-            <span class="transport-detail">Direct P2P over TCP socket</span>
+            <span class="transport-name">Local Wi-Fi</span>
+            <span class="transport-detail">Works on the same Wi-Fi</span>
           </div>
           <span class="badge badge-working">Working</span>
         </div>
@@ -2114,18 +2114,14 @@ details.expander[open] {
               <svg class="ico" aria-hidden="true"><use href="#i-route" xlink:href="#i-route"/></svg>
             </div>
             <div class="transport-info">
-              <span class="transport-name">Anonymous routing (Mixnet)</span>
-              <span class="transport-detail">Chaumian Sphinx onion routing</span>
+              <span class="transport-name">Hidden route</span>
+              <span class="transport-detail">Experimental</span>
             </div>
             <span class="badge badge-experimental">Experimental</span>
           </summary>
           <div class="expander-content">
-            <div class="transport-detail-text">Wraps messages in Sphinx onion encryption with timing jitter and cover traffic to defeat traffic analysis.</div>
-            <div class="transport-stats">
-              <div class="stat-item"><span class="stat-label">Hops</span><span class="stat-value">3</span></div>
-              <div class="stat-item"><span class="stat-label">Jitter</span><span class="stat-value">20–120ms</span></div>
-              <div class="stat-item"><span class="stat-label">Cover traffic</span><span class="stat-value">Active</span></div>
-            </div>
+            <div class="transport-detail-text">Sends messages through several stops so others cannot tell who is talking to whom.</div>
+
           </div>
         </details>
 
@@ -2135,8 +2131,8 @@ details.expander[open] {
             <svg class="ico" aria-hidden="true"><use href="#i-bluetooth" xlink:href="#i-bluetooth"/></svg>
           </div>
           <div class="transport-info">
-            <span class="transport-name">Bluetooth radio mesh</span>
-            <span class="transport-detail">CoreBluetooth / Android BLE mesh transport</span>
+            <span class="transport-name">Bluetooth</span>
+            <span class="transport-detail">Experimental · Connects to nearby phones without Wi-Fi</span>
           </div>
           <span class="badge badge-experimental">Experimental</span>
         </div>
@@ -2148,14 +2144,14 @@ details.expander[open] {
               <svg class="ico" aria-hidden="true"><use href="#i-message-square-text" xlink:href="#i-message-square-text"/></svg>
             </div>
             <div class="transport-info">
-              <span class="transport-name">SMS carrier</span>
-              <span class="transport-detail">140-char cellular text frames</span>
+              <span class="transport-name">Send by text message</span>
+              <span class="transport-detail">Experimental</span>
             </div>
             <span class="badge badge-experimental">Experimental</span>
           </summary>
           <div class="expander-content">
-            <div class="transport-detail-text">Encodes encrypted ciphertexts into 140-character SMS payload frames without data/internet access.</div>
-            <button class="btn-action btn-ghost btn-sm" onclick="generateSmsFrameDemo()">Generate test frame</button>
+            <div class="transport-detail-text">Turns your message into scrambled texts. Works without mobile data. Your phone company cannot read it.</div>
+            <button class="btn-action btn-ghost btn-sm" onclick="generateSmsFrameDemo()">Create text message</button>
             <div id="smsFrameResult" class="code-block font-mono" style="display:none"></div>
           </div>
         </details>
@@ -2167,14 +2163,14 @@ details.expander[open] {
               <svg class="ico" aria-hidden="true"><use href="#i-audio-waveform" xlink:href="#i-audio-waveform"/></svg>
             </div>
             <div class="transport-info">
-              <span class="transport-name">Audio modem</span>
-              <span class="transport-detail">Bell 202 AFSK acoustic tones</span>
+              <span class="transport-name">Send by sound</span>
+              <span class="transport-detail">Experimental</span>
             </div>
             <span class="badge badge-experimental">Experimental</span>
           </summary>
           <div class="expander-content">
-            <div class="transport-detail-text">Modulates messages into acoustic frequencies (1200 / 2200 Hz) for walkie-talkie, radio, or speaker-to-mic transfer.</div>
-            <button class="btn-action btn-ghost btn-sm" onclick="playAcousticTones()">Play test tones</button>
+            <div class="transport-detail-text">Plays your message as sounds another phone can pick up, over a call or speaker to microphone.</div>
+            <button class="btn-action btn-ghost btn-sm" onclick="playAcousticTones()">Play sound</button>
           </div>
         </details>
 
@@ -2185,16 +2181,16 @@ details.expander[open] {
               <svg class="ico" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg>
             </div>
             <div class="transport-info">
-              <span class="transport-name">Air-gap key exchange</span>
-              <span class="transport-detail">Offline public key bundle</span>
+              <span class="transport-name">Your contact card</span>
+              <span class="transport-detail">Ready</span>
             </div>
             <span class="badge badge-working">Ready</span>
           </summary>
           <div class="expander-content">
-            <div class="transport-detail-text">Public cryptographic identity for offline out-of-band peer verification.</div>
+            <div class="transport-detail-text">Let someone add you by scanning your QR code. No internet needed.</div>
             <div id="qrPayloadDisplaySide" class="code-block font-mono">Loading…</div>
             <button class="btn-action btn-ghost btn-sm" onclick="copyIdentityPayload()">
-              <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy" xlink:href="#i-copy"/></svg> Copy public identity
+              <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy" xlink:href="#i-copy"/></svg> Copy contact card
             </button>
           </div>
         </details>
@@ -2206,11 +2202,11 @@ details.expander[open] {
       <div class="tab-pane-header">
         <h2 class="tab-pane-title">Rooms</h2>
       </div>
-      <div class="tab-pane-desc">Disappearing rooms — ephemeral group chat where all messages live in volatile memory and vanish upon closing.</div>
+      <div class="tab-pane-desc">Messages in these rooms are deleted when everyone leaves.</div>
       <div class="rooms-form">
         <label class="form-label" for="burnerRoomInput">Room name</label>
         <input type="text" class="form-input" id="burnerRoomInput" placeholder="e.g. ghost-room-7" aria-label="Room name">
-        <label class="form-label" for="burnerPassInput">Shared passphrase</label>
+        <label class="form-label" for="burnerPassInput">Room password</label>
         <input type="password" class="form-input" id="burnerPassInput" placeholder="e.g. whisper-delta-99" aria-label="Shared passphrase">
         <button class="btn-action btn-primary" onclick="enterBurnerRoom()" style="margin-top:var(--space-2)">
           <svg class="ico ico-sm ico--amber" aria-hidden="true"><use href="#i-flame" xlink:href="#i-flame"/></svg> Join room
@@ -2221,10 +2217,10 @@ details.expander[open] {
     <!-- Tab 4: Me (Identity & Profile) -->
     <div class="tab-pane" id="tabPaneMe">
       <div class="tab-pane-header">
-        <h2 class="tab-pane-title">My identity</h2>
-        <span class="badge badge-working" id="keyStatusBadge">Keys ready</span>
+        <h2 class="tab-pane-title">My profile</h2>
+        <span class="badge badge-working" id="keyStatusBadge">Ready</span>
       </div>
-      <div class="tab-pane-desc">Your cryptographic device keys, mesh username, and network identity.</div>
+      <div class="tab-pane-desc">Your name and address so people can reach you.</div>
       
       <div class="identity-card">
         <div style="display:flex; align-items:center; gap:var(--space-3); margin-bottom:var(--space-2);">
@@ -2243,7 +2239,7 @@ details.expander[open] {
           </button>
         </div>
         <div class="identity-row">
-          <span class="identity-label">Fingerprint</span>
+          <span class="identity-label">Safety code</span>
           <span class="identity-value font-mono" id="meFingerprint">—</span>
           <button class="btn-icon" onclick="copyFingerprint()" aria-label="Copy fingerprint" title="Copy fingerprint">
             <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy" xlink:href="#i-copy"/></svg>
@@ -2254,7 +2250,7 @@ details.expander[open] {
       <details class="expander" style="margin-bottom:var(--space-4)">
         <summary style="background:var(--bg-raised); border:1px solid var(--border-hairline); border-radius:var(--radius-md);">
           <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-info" xlink:href="#i-info"/></svg>
-          <span>Cryptographic details</span>
+          <span>Advanced details</span>
         </summary>
         <div class="expander-content">
           <div id="profileDetailsBody" class="code-block font-mono">…</div>
@@ -2263,10 +2259,10 @@ details.expander[open] {
 
       <div style="display:flex; gap:var(--space-2);">
         <button class="btn-action btn-primary" onclick="openModal('qrModal')" style="flex:1;">
-          <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Share badge
+          <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Share my QR code
         </button>
         <button class="btn-action btn-secondary" onclick="openScannerFromQr()" style="flex:1;">
-          <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Scan badge
+          <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Scan a QR code
         </button>
       </div>
     </div>
@@ -2282,17 +2278,17 @@ details.expander[open] {
         <span class="ico-tile"><svg class="ico" aria-hidden="true"><use href="#i-message-square" xlink:href="#i-message-square"/></svg></span>
         <span class="nav-label">Chats</span>
       </button>
-      <button class="nav-tab" id="navItemCarrier" onclick="switchTab('carrier')" aria-label="Network">
+      <button class="nav-tab" id="navItemCarrier" onclick="switchTab('carrier')" aria-label="Ways to send">
         <span class="ico-tile"><svg class="ico" aria-hidden="true"><use href="#i-globe" xlink:href="#i-globe"/></svg></span>
-        <span class="nav-label">Network</span>
+        <span class="nav-label">Ways to send</span>
       </button>
       <button class="nav-tab" id="navItemBurner" onclick="switchTab('rooms')" aria-label="Rooms">
         <span class="ico-tile"><svg class="ico" aria-hidden="true"><use href="#i-flame" xlink:href="#i-flame"/></svg></span>
         <span class="nav-label">Rooms</span>
       </button>
-      <button class="nav-tab" id="navItemProfile" onclick="switchTab('me')" aria-label="Me">
+      <button class="nav-tab" id="navItemProfile" onclick="switchTab('me')" aria-label="My profile">
         <span class="ico-tile"><svg class="ico" aria-hidden="true"><use href="#i-user-round" xlink:href="#i-user-round"/></svg></span>
-        <span class="nav-label">Me</span>
+        <span class="nav-label">My profile</span>
       </button>
     </nav>
   </aside>
@@ -2315,16 +2311,16 @@ details.expander[open] {
             </g>
           </svg>
         </div>
-        <h2 class="empty-state-title">End-to-End Encrypted</h2>
-        <p class="empty-state-desc">Peer-to-peer messaging designed for network blackouts and local communication. No central servers, no telemetry, no tracking.</p>
+        <h2 class="empty-state-title">Private by design</h2>
+        <p class="empty-state-desc">Your messages go straight to the other person. Only the two of you can read them.</p>
         <button class="btn-action btn-primary" onclick="openModal('addPeerModal')">
-          <svg class="ico ico-sm" aria-hidden="true"><use href="#i-message-square-plus" xlink:href="#i-message-square-plus"/></svg> Start new chat
+          <svg class="ico ico-sm" aria-hidden="true"><use href="#i-message-square-plus" xlink:href="#i-message-square-plus"/></svg> New chat
         </button>
         <div class="empty-state-hint">
-          <strong>Quick start (3 steps):</strong>
-          <span>1. Share your IP:port address or @username</span>
-          <span>2. Add your peer's address or scan their badge</span>
-          <span>3. Start communicating securely</span>
+          <strong>How to start:</strong>
+          <span>1. Share your address or username</span>
+          <span>2. Add their address or scan their QR code</span>
+          <span>3. Send a message</span>
         </div>
       </div>
     </div>
@@ -2337,17 +2333,17 @@ details.expander[open] {
         </button>
         <div class="active-peer-avatar-box" id="activePeerAvatar">?</div>
         <div class="chat-peer-info-box">
-          <div class="chat-peer-title-text" id="activePeerName">Peer</div>
+          <div class="chat-peer-title-text" id="activePeerName">Contact</div>
           <div class="chat-peer-status-text" id="activePeerStatus">Connecting…</div>
         </div>
         <div class="chat-header-actions">
-          <button class="action-circle-btn" onclick="openSafetyVerificationModal()" aria-label="Verify Safety Code" title="Verify Safety Code">
+          <button class="action-circle-btn" onclick="openSafetyVerificationModal()" aria-label="Check safety code" title="Check safety code">
             <svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-shield-check" xlink:href="#i-shield-check"/></svg>
           </button>
-          <button class="action-circle-btn" onclick="pingActivePeer()" aria-label="Check peer latency" title="Check latency">
+          <button class="action-circle-btn" onclick="pingActivePeer()" aria-label="Check connection" title="Check connection">
             <svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-signal" xlink:href="#i-signal"/></svg>
           </button>
-          <button class="action-circle-btn" onclick="openModal('peerInfoModal')" aria-label="Peer details" title="Peer details">
+          <button class="action-circle-btn" onclick="openModal('peerInfoModal')" aria-label="Contact details" title="Contact details">
             <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-info" xlink:href="#i-info"/></svg>
           </button>
         </div>
@@ -2355,7 +2351,7 @@ details.expander[open] {
       
       <div class="security-strip">
         <svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-lock" xlink:href="#i-lock"/></svg>
-        <span>Double Ratchet + ChaCha20-Poly1305 · Forward Secret</span>
+        <span id="chatSecurityNotice">Only you and your contact can read these messages.</span>
       </div>
 
       <div class="messages-area" id="messagesArea">
@@ -2376,7 +2372,7 @@ details.expander[open] {
         <button class="action-circle-btn" onclick="toggleEmojiDrawer()" aria-label="Open emoji picker" title="Emojis" style="flex-shrink:0;">
           😊
         </button>
-        <input type="text" class="input-box" id="msgInput" placeholder="Write an encrypted message…" onkeydown="if(event.key==='Enter') sendCurrentMessage()" aria-label="Type message">
+        <input type="text" class="input-box" id="msgInput" placeholder="Type a message…" onkeydown="if(event.key==='Enter') sendCurrentMessage()" aria-label="Type message">
         <button class="btn-send" onclick="sendCurrentMessage()" aria-label="Send message">
           <svg class="ico ico--cyan" aria-hidden="true"><use href="#i-send-horizontal" xlink:href="#i-send-horizontal"/></svg>
         </button>
@@ -2392,34 +2388,34 @@ details.expander[open] {
   <div class="modal-card">
     <button class="modal-close-x" onclick="closeModal('addPeerModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
     <h2 class="modal-title">New chat</h2>
-    <p class="modal-desc">Connect directly using a @username, nickname, invite link, or local IP:Port.</p>
+    <p class="modal-desc">Add someone using their address, username, or QR code.</p>
     
     <div style="margin-bottom: var(--space-3);">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-        <label class="form-label" style="margin:0;">Peer Identifier or Username</label>
+        <label class="form-label" style="margin:0;">Username or address</label>
         <span style="font-size:11px; color:var(--holo-cyan); cursor:pointer;" onclick="closeModal('addPeerModal'); openScannerFromQr();"><svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Scan QR</span>
       </div>
-      <input type="text" class="form-input font-mono" id="smartPeerInput" placeholder="@username, Alice, or 192.168.1.15:9400" oninput="onSmartPeerInputChanged(this.value)" onkeydown="if(event.key==='Enter') confirmSmartConnect()">
-      <div id="smartResolutionFeedback" class="form-hint" style="color:var(--text-3)">Enter a peer @username, address, or paste an invite link.</div>
+      <input type="text" class="form-input font-mono" id="smartPeerInput" placeholder="Address, like 192.168.1.20:4000" oninput="onSmartPeerInputChanged(this.value)" onkeydown="if(event.key==='Enter') confirmSmartConnect()">
+      <div id="smartResolutionFeedback" class="form-hint" style="color:var(--text-3)">Enter a username or an address.</div>
     </div>
 
-    <label class="form-label" for="newAliasInput">Display Nickname <span class="form-optional">optional</span></label>
+    <label class="form-label" for="newAliasInput">Name <span class="form-optional">optional</span></label>
     <input type="text" class="form-input" id="newAliasInput" placeholder="e.g. Alice, HQ Station" aria-label="Contact name" onkeydown="if(event.key==='Enter') confirmSmartConnect()">
 
     <details class="expander" style="margin: var(--space-3) 0;">
-      <summary style="font-size:11.5px; color:var(--text-2); cursor:pointer; font-weight:600;"><svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-settings" xlink:href="#i-settings"/></svg> Advanced Connection Overrides</summary>
+      <summary style="font-size:11.5px; color:var(--text-2); cursor:pointer; font-weight:600;"><svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-settings" xlink:href="#i-settings"/></svg> More options</summary>
       <div class="expander-content">
-        <label class="form-label">Resolved Socket Target</label>
+        <label class="form-label">Address</label>
         <input type="text" class="form-input font-mono" id="newTargetInput" placeholder="Auto-resolved or 192.168.1.15:9400" oninput="validatePeerAddress()">
         <div class="form-hint" id="addressValidationHint"></div>
-        <label class="form-label" style="margin-top:8px;">Prekey Bundle <span class="form-optional">optional</span></label>
-        <textarea class="form-input font-mono" id="newBundleInput" rows="2" placeholder="Leave empty for automatic X3DH key exchange"></textarea>
+        <label class="form-label" style="margin-top:8px;">Security code <span class="form-optional">optional</span></label>
+        <textarea class="form-input font-mono" id="newBundleInput" rows="2" placeholder="Leave empty to connect automatically"></textarea>
       </div>
     </details>
 
     <div class="modal-actions">
       <button class="btn-action btn-cancel" onclick="closeModal('addPeerModal')">Cancel</button>
-      <button class="btn-action btn-primary" id="confirmAddBtn" onclick="confirmSmartConnect()">Connect</button>
+      <button class="btn-action btn-primary" id="confirmAddBtn" onclick="confirmSmartConnect()">Add contact</button>
     </div>
   </div>
 </div>
@@ -2428,13 +2424,13 @@ details.expander[open] {
 <div class="modal-overlay" id="qrModal" role="dialog" aria-modal="true" aria-label="Share identity">
   <div class="modal-card" style="text-align:center; max-width:380px;">
     <button class="modal-close-x" onclick="closeModal('qrModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title" style="justify-content:center">Identity &amp; QR Badge</h2>
-    <p class="modal-desc">Present your cryptographic badge for zero-config air-gap pairing.</p>
+    <h2 class="modal-title" style="justify-content:center">Your QR code</h2>
+    <p class="modal-desc">Let someone add you by scanning your QR code. No internet needed.</p>
     
     <!-- Segmented Style Toggle: Designer vs High Contrast -->
     <div style="display:inline-flex; background:var(--bg-surface); border:1px solid var(--border-hairline); border-radius:10px; padding:3px; margin:8px auto 0;">
-      <button id="qrModeDesignerBtn" onclick="setQrStyleMode('designer')" style="background:var(--tile-cyan); color:var(--ink-cyan); border:none; padding:4px 12px; border-radius:7px; font-size:11px; font-weight:600; cursor:pointer;">✨ Designer</button>
-      <button id="qrModeContrastBtn" onclick="setQrStyleMode('contrast')" style="background:transparent; color:var(--text-2); border:none; padding:4px 12px; border-radius:7px; font-size:11px; font-weight:600; cursor:pointer;">⚡ High Contrast</button>
+      <button id="qrModeDesignerBtn" onclick="setQrStyleMode('designer')" style="background:var(--tile-cyan); color:var(--ink-cyan); border:none; padding:4px 12px; border-radius:7px; font-size:11px; font-weight:600; cursor:pointer;">Standard</button>
+      <button id="qrModeContrastBtn" onclick="setQrStyleMode('contrast')" style="background:transparent; color:var(--text-2); border:none; padding:4px 12px; border-radius:7px; font-size:11px; font-weight:600; cursor:pointer;">High contrast</button>
     </div>
 
     <div style="position:relative; margin:14px auto 10px; width:260px; height:260px;">
@@ -2456,8 +2452,8 @@ details.expander[open] {
     <div id="qrPayloadDisplay" class="code-block font-mono" style="display:none">Loading…</div>
 
     <div class="modal-actions" style="justify-content:center; gap:8px;">
-      <button class="btn-action btn-primary btn-sm" onclick="copyIdentityPayload()"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy" xlink:href="#i-copy"/></svg> Copy Details</button>
-      <button class="btn-action btn-secondary btn-sm" onclick="openScannerFromQr()"><svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Scan Badge</button>
+      <button class="btn-action btn-primary btn-sm" onclick="copyIdentityPayload()"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy" xlink:href="#i-copy"/></svg> Copy contact card</button>
+      <button class="btn-action btn-secondary btn-sm" onclick="openScannerFromQr()"><svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Scan a QR code</button>
       <button class="btn-action btn-cancel btn-sm" onclick="closeModal('qrModal')">Close</button>
     </div>
   </div>
@@ -2467,8 +2463,8 @@ details.expander[open] {
 <div class="modal-overlay" id="qrScannerModal" role="dialog" aria-modal="true" aria-label="Scan QR Code">
   <div class="modal-card" style="text-align:center; max-width:360px;">
     <button class="modal-close-x" onclick="closeQrScanner()" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title" style="justify-content:center">Scan Peer Badge</h2>
-    <p class="modal-desc">Align a peer's xChat QR badge within the viewfinder.</p>
+    <h2 class="modal-title" style="justify-content:center">Scan QR code</h2>
+    <p class="modal-desc">Point your camera at their QR code.</p>
 
     <div class="scanner-viewfinder">
       <video id="qrScannerVideo" playsinline autoplay muted></video>
@@ -2480,27 +2476,27 @@ details.expander[open] {
     </div>
 
     <div id="scannerStatusText" style="font-size:12px; color:var(--text-2); margin-bottom:14px;">
-      Looking for valid xChat QR badge…
+      Looking for QR code…
     </div>
 
     <input type="file" id="qrFileInput" accept="image/*" capture="environment" style="display:none;" onchange="handleQrImageUpload(event)" />
 
     <div class="modal-actions" style="justify-content:center; gap:8px;">
-      <button class="btn-action btn-ghost" onclick="document.getElementById('qrFileInput').click()"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Upload Image</button>
+      <button class="btn-action btn-ghost" onclick="document.getElementById('qrFileInput').click()"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-qr-code" xlink:href="#i-qr-code"/></svg> Scan from photo</button>
       <button class="btn-action btn-cancel" onclick="closeQrScanner()">Cancel</button>
     </div>
   </div>
 </div>
 
 <!-- Modal: Visual Safety Verification (Heuristic 6) -->
-<div class="modal-overlay" id="safetyVerificationModal" role="dialog" aria-modal="true" aria-label="Safety Code Verification">
+<div class="modal-overlay" id="safetyVerificationModal" role="dialog" aria-modal="true" aria-label="Check safety code">
   <div class="modal-card" style="text-align:center; max-width:380px;">
     <button class="modal-close-x" onclick="closeModal('safetyVerificationModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title" style="justify-content:center"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-shield-check" xlink:href="#i-shield-check"/></svg> Safety Code Verification</h2>
-    <p class="modal-desc">Compare these 6 emoji symbols with <strong id="safetyPeerName" style="color:var(--text-1);">Peer</strong> out-of-band to mathematically verify encryption integrity.</p>
+    <h2 class="modal-title" style="justify-content:center"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-shield-check" xlink:href="#i-shield-check"/></svg> Check safety code</h2>
+    <p class="modal-desc">Compare these symbols with <strong id="safetyPeerName" style="color:var(--text-1);">Contact</strong>'s screen to make sure it's really them.</p>
 
     <div style="background:var(--bg-input); border:1px solid var(--border-hairline); border-radius:var(--radius-lg); padding:18px 12px; margin:16px 0; ">
-      <div style="font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--holo-cyan); margin-bottom:8px; font-weight:700;">Deterministic Emoji Safety Blocks</div>
+      <div style="font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--holo-cyan); margin-bottom:8px; font-weight:700;">Safety symbols</div>
       <div id="safetyEmojiDisplay" class="font-mono" style="font-size:26px; letter-spacing:8px; margin:10px 0; user-select:text;">
         🔒 🌸 ⚡ 🐬 💎 🪐
       </div>
@@ -2510,11 +2506,11 @@ details.expander[open] {
     </div>
 
     <div style="font-size:11.5px; color:var(--text-2); line-height:1.5; margin-bottom:16px; text-align:left;">
-      If the symbols on both devices are identical, your messages are guaranteed to be cryptographically secure and protected against man-in-the-middle attacks.
+      If both screens show the same symbols, no one else can read your messages.
     </div>
 
     <div class="modal-actions" style="justify-content:center; gap:8px;">
-      <button class="btn-action btn-primary" onclick="markPeerAsVerified()"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-check-check" xlink:href="#i-check-check"/></svg> Mark as Verified</button>
+      <button class="btn-action btn-primary" onclick="markPeerAsVerified()"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-check-check" xlink:href="#i-check-check"/></svg> Mark as checked</button>
       <button class="btn-action btn-cancel" onclick="closeModal('safetyVerificationModal')">Close</button>
     </div>
   </div>
@@ -2524,16 +2520,16 @@ details.expander[open] {
 <div class="modal-overlay" id="profileModal" role="dialog" aria-modal="true" aria-label="Profile and Identity">
   <div class="modal-card" style="max-width:400px;">
     <button class="modal-close-x" onclick="closeModal('profileModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title">Mesh Identity &amp; Profile</h2>
-    <p class="modal-desc">Configure your anonymous presence broadcasted over local radio.</p>
+    <h2 class="modal-title">Mesh My profile</h2>
+    <p class="modal-desc">Change your display name and appearance.</p>
 
     <!-- Avatar Preview & Swatches -->
     <div style="display:flex; align-items:center; gap:16px; margin:16px 0;">
       <div id="profileAvatarPreview" class="contact-avatar" style="width:56px; height:56px; font-size:22px; flex-shrink:0;">U</div>
       <div style="flex:1;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-          <span style="font-size:11px; color:var(--text-3); text-transform:uppercase;">Avatar Accent</span>
-          <button type="button" onclick="createNewIdentity()" class="btn-action btn-ghost btn-sm" style="font-size:10px; padding:2px 6px;"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-key-round" xlink:href="#i-key-round"/></svg> Fresh Keys</button>
+          <span style="font-size:11px; color:var(--text-3); text-transform:uppercase;">Color</span>
+          <button type="button" onclick="createNewIdentity()" class="btn-action btn-ghost btn-sm" style="font-size:10px; padding:2px 6px;"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-key-round" xlink:href="#i-key-round"/></svg> Reset security code</button>
         </div>
         <div style="display:flex; gap:8px;">
           <div class="swatch-btn" onclick="selectAvatarColor(0)" style="width:22px; height:22px; border-radius:6px; background:#8FD3F0; cursor:pointer;"></div>
@@ -2545,14 +2541,14 @@ details.expander[open] {
       </div>
     </div>
 
-    <label class="form-label" for="profileUsernameInput">Mesh Username (@handle)</label>
+    <label class="form-label" for="profileUsernameInput">Username</label>
     <input type="text" class="form-input font-mono" id="profileUsernameInput" placeholder="@operator" oninput="onProfileUsernameChanged(this.value)">
 
-    <label class="form-label" for="profileDisplayNameInput">Display Name</label>
+    <label class="form-label" for="profileDisplayNameInput">Name</label>
     <input type="text" class="form-input" id="profileDisplayNameInput" placeholder="Mesh Operator" oninput="onProfileDisplayNameChanged(this.value)">
 
-    <label class="form-label" for="profileBioInput">Broadcast Bio / Status</label>
-    <input type="text" class="form-input" id="profileBioInput" placeholder="Zero Metadata • Direct P2P">
+    <label class="form-label" for="profileBioInput">About you</label>
+    <input type="text" class="form-input" id="profileBioInput" placeholder="Available">
 
     <div class="modal-actions">
       <button class="btn-action btn-cancel" onclick="closeModal('profileModal')">Cancel</button>
@@ -2562,25 +2558,25 @@ details.expander[open] {
 </div>
 
 <!-- Modal: Carrier Transport Selector -->
-<div class="modal-overlay" id="carrierTransportModal" role="dialog" aria-modal="true" aria-label="Select transport">
+<div class="modal-overlay" id="carrierTransportModal" role="dialog" aria-modal="true" aria-label="Ways to send">
   <div class="modal-card">
     <button class="modal-close-x" onclick="closeModal('carrierTransportModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title">Select transport</h2>
-    <p class="modal-desc">Configure carrier and routing for outbound messages.</p>
+    <h2 class="modal-title">Ways to send</h2>
+    <p class="modal-desc">Choose how your messages travel.</p>
     <div class="transport-select-list">
-      <button class="transport-select-item" onclick="closeModal('carrierTransportModal'); showToast('Anonymous mixnet routing enabled');">
+      <button class="transport-select-item" onclick="closeModal('carrierTransportModal'); showToast(STRINGS.toastHiddenRouteEnabled);">
         <svg class="ico ico--violet" aria-hidden="true"><use href="#i-route" xlink:href="#i-route"/></svg>
-        <div><strong>Anonymous routing</strong><br><span class="text-2">Mixnet with 3 hops &amp; jitter</span></div>
+        <div><strong>Hidden route</strong><br><span class="text-2">Sends messages through several stops</span></div>
         <span class="badge badge-simulated">Experimental</span>
       </button>
       <button class="transport-select-item" onclick="closeModal('carrierTransportModal'); switchTab('carrier');">
         <svg class="ico ico--violet" aria-hidden="true"><use href="#i-message-square-text" xlink:href="#i-message-square-text"/></svg>
-        <div><strong>SMS carrier</strong><br><span class="text-2">140-char frames (no internet)</span></div>
+        <div><strong>Send by text message</strong><br><span class="text-2">Works without mobile data</span></div>
         <span class="badge badge-simulated">Simulated</span>
       </button>
       <button class="transport-select-item" onclick="closeModal('carrierTransportModal'); switchTab('carrier');">
         <svg class="ico ico--violet" aria-hidden="true"><use href="#i-audio-waveform" xlink:href="#i-audio-waveform"/></svg>
-        <div><strong>Audio modem</strong><br><span class="text-2">AFSK acoustic tones over radio</span></div>
+        <div><strong>Send by sound</strong><br><span class="text-2">Plays message as sounds</span></div>
         <span class="badge badge-simulated">Simulated</span>
       </button>
     </div>
@@ -2595,10 +2591,10 @@ details.expander[open] {
   <div class="modal-card">
     <button class="modal-close-x" onclick="closeModal('burnerModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
     <h2 class="modal-title"><svg class="ico ico-sm ico--amber" aria-hidden="true"><use href="#i-flame" xlink:href="#i-flame"/></svg> Disappearing room</h2>
-    <p class="modal-desc">Messages live in volatile memory only and are never saved to disk.</p>
+    <p class="modal-desc">Messages in this room are deleted when everyone leaves.</p>
     <label class="form-label" for="burnerRoomInputModal">Room name</label>
     <input type="text" class="form-input" id="burnerRoomInputModal" placeholder="e.g. ghost-room-7">
-    <label class="form-label" for="burnerPassInputModal">Shared passphrase</label>
+    <label class="form-label" for="burnerPassInputModal">Room password</label>
     <input type="password" class="form-input" id="burnerPassInputModal" placeholder="e.g. whisper-delta-99">
     <div class="modal-actions">
       <button class="btn-action btn-cancel" onclick="closeModal('burnerModal')">Cancel</button>
@@ -2608,73 +2604,85 @@ details.expander[open] {
 </div>
 
 <!-- Modal: Peer Info -->
-<div class="modal-overlay" id="peerInfoModal" role="dialog" aria-modal="true" aria-label="Peer details">
+<div class="modal-overlay" id="peerInfoModal" role="dialog" aria-modal="true" aria-label="Contact details">
   <div class="modal-card">
     <button class="modal-close-x" onclick="closeModal('peerInfoModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title" id="peerInfoTitle">Peer details</h2>
+    <h2 class="modal-title" id="peerInfoTitle">Contact details</h2>
     <div id="peerInfoBody" class="code-block font-mono" style="max-height:160px; margin:var(--space-3) 0">…</div>
     <div class="modal-actions">
       <button class="btn-action btn-danger" onclick="deleteActivePeer()">
-        <svg class="ico ico-sm ico--coral" aria-hidden="true"><use href="#i-trash-2" xlink:href="#i-trash-2"/></svg> Remove peer
+        <svg class="ico ico-sm ico--coral" aria-hidden="true"><use href="#i-trash-2" xlink:href="#i-trash-2"/></svg> Delete contact
       </button>
       <button class="btn-action btn-cancel" onclick="closeModal('peerInfoModal')">Close</button>
     </div>
   </div>
 </div>
 
-<!-- Sheet: Help & Documentation (Heuristic 10) -->
-<div class="modal-overlay" id="helpSheet" role="dialog" aria-modal="true" aria-label="Help and glossary">
+<!-- Sheet: Help & Documentation -->
+<div class="modal-overlay" id="helpSheet" role="dialog" aria-modal="true" aria-label="Help">
   <div class="modal-card">
     <button class="modal-close-x" onclick="closeModal('helpSheet')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title">Help &amp; Glossary</h2>
-    <p class="modal-desc">Quick guide and reference for xChat offline messaging.</p>
+    <h2 class="modal-title">Help</h2>
+    <p class="modal-desc">How xChat works without internet.</p>
     <div class="help-glossary">
       <details class="help-item" open>
         <summary>What is xChat?</summary>
-        <p>A serverless, peer-to-peer encrypted messenger designed for situations where normal internet or cellular service is unavailable. Messages travel directly between devices over Wi-Fi, local networks, BLE mesh, or ad-hoc connections.</p>
+        <p>A private messenger that connects directly to people around you over Wi-Fi, Bluetooth, or local networks. It works even during network blackouts.</p>
       </details>
       <details class="help-item">
-        <summary>How do I connect to a peer?</summary>
-        <p>Share your @username, invite link, or IP:port address (shown on Chats tab). Your peer enters it under "New chat" or scans your QR code. Both devices must be on the same local network or in BLE range.</p>
+        <summary>How do I add someone?</summary>
+        <p>Share your username or address (shown on the Chats tab). Your contact enters it under "New chat" or scans your QR code.</p>
       </details>
       <details class="help-item">
-        <summary>What does "End-to-End Encrypted" mean?</summary>
-        <p>Only you and the recipient can read messages. Each message is encrypted with ChaCha20-Poly1305 using keys negotiated via X3DH and rotated with the Double Ratchet. No intermediaries can decrypt them.</p>
+        <summary>Who can read my messages?</summary>
+        <p>Only you and the person you message. No one in between can read them.</p>
       </details>
       <details class="help-item">
-        <summary>Safety Verification (Emoji Blocks)</summary>
-        <p>Each connection derives a deterministic sequence of 6 emoji symbols from peer identity keys. Compare them in person to mathematically verify that no third party is intercepting your chat.</p>
+        <summary>What are safety codes?</summary>
+        <p>A 6-symbol code for each chat. Compare it with your contact to make sure no one is in the middle.</p>
       </details>
       <details class="help-item">
-        <summary>Anonymous routing (Mixnet)</summary>
-        <p>Wraps messages in Sphinx onion encryption and introduces random delay jitter (20–120ms) and cover traffic to obscure communication patterns from network eavesdroppers.</p>
+        <summary>How do disappearing rooms work?</summary>
+        <p>Messages are kept in temporary memory and are deleted completely when everyone leaves.</p>
       </details>
       <details class="help-item">
-        <summary>Disappearing rooms</summary>
-        <p>Ephemeral group channels where message history lives solely in device RAM and is immediately purged upon leaving.</p>
+        <summary>What does the emergency alert do?</summary>
+        <p>Sends a call for help to xChat users nearby. Hold the alert button for 2 seconds to send.</p>
       </details>
       <details class="help-item">
-        <summary>Emergency SOS</summary>
-        <p>Broadcasts an encrypted distress beacon to all reachable peers. Requires holding the button for 2 full seconds to prevent accidental triggers.</p>
-      </details>
-      <details class="help-item">
-        <summary>Transport status labels</summary>
-        <p><strong>Working:</strong> Live, functioning hardware transport (TCP socket over Wi-Fi/LAN, BLE mesh).<br><strong>Simulated:</strong> Working algorithm tested in software simulation; no physical hardware connected.<br><strong>Unavailable:</strong> Transport unsupported on this platform or device.</p>
+        <summary>What do the status labels mean?</summary>
+        <p>Working means ready to send right now. Experimental means a feature being tested.</p>
       </details>
     </div>
   </div>
 </div>
 
-<!-- Sheet: About xChat -->
-<div class="modal-overlay" id="aboutSheet" role="dialog" aria-modal="true" aria-label="About xChat">
+<!-- Sheet: About xChat / How xChat keeps you private -->
+<div class="modal-overlay" id="aboutSheet" role="dialog" aria-modal="true" aria-label="How xChat keeps you private">
   <div class="modal-card">
     <button class="modal-close-x" onclick="closeModal('aboutSheet')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x" xlink:href="#i-x"/></svg></button>
-    <h2 class="modal-title">About xChat</h2>
-    <p class="modal-desc">Offline-first, serverless encrypted messenger built in Rust.</p>
-    <div style="font-size:var(--text-xs); color:var(--text-2); line-height:1.6; display:flex; flex-direction:column; gap:var(--space-2)">
-      <p><strong>Architecture:</strong> Rust core workspace (xchat-core, xchat-crypto, xchat-transport, xchat-cli) + native Android WebView &amp; BLE wrappers.</p>
-      <p><strong>Cryptography:</strong> X3DH key agreement, Double Ratchet forward secrecy, ChaCha20-Poly1305 AEAD, Chaumian Sphinx onion routing.</p>
-      <p><strong>Design System:</strong> Holo icon system based on Lucide (MIT License), Nielsen 10 Usability Heuristics, WCAG AA dark palette.</p>
+    <h2 class="modal-title">How xChat keeps you private</h2>
+    <p class="modal-desc">xChat is an offline-first private messenger designed for stressful situations and network blackouts.</p>
+    <div style="font-size:var(--text-sm); color:var(--text-2); line-height:1.6; display:flex; flex-direction:column; gap:var(--space-3); margin:var(--space-4) 0;">
+      <p><strong>Direct connection:</strong> Your messages travel straight from your phone to the other person over your local Wi-Fi or Bluetooth. No central company or server sees or stores them.</p>
+      <p><strong>Private by design:</strong> Everything you send is locked so only you and the other person can read it.</p>
+      <p><strong>Safety codes:</strong> Each chat has a simple 6-symbol code. Compare it with your contact to be sure you are talking directly with no one in between.</p>
+      <p><strong>Emergency alert:</strong> Sends a call for help to xChat users nearby when you need assistance.</p>
+      <p><strong>Disappearing rooms:</strong> Messages in these rooms are deleted completely when everyone leaves.</p>
+      <p><strong>Ways to send:</strong> If internet or Wi-Fi is down, xChat can send messages over Bluetooth, text messages (SMS), or sound.</p>
+      
+      <details class="expander" style="margin-top:var(--space-2)">
+        <summary style="font-size:12px; color:var(--text-3); cursor:pointer;">Technical details</summary>
+        <div class="expander-content font-mono" style="font-size:11px; color:var(--text-3); line-height:1.5; padding:8px; background:var(--bg-input); border-radius:var(--radius-sm); margin-top:6px;">
+          Version: 0.2.0 (Offline-First)<br>
+          Core: Rust (xchat-core, xchat-crypto, xchat-transport)<br>
+          Icons: Lucide (ISC License), Tabler (MIT License)<br>
+          Security: Double Ratchet forward secrecy, ChaCha20-Poly1305 authenticated encryption, X3DH key agreement
+          <div style="margin-top:6px;">
+            <button class="btn-action btn-ghost btn-sm" onclick="copyTechnicalDetails()">Copy details</button>
+          </div>
+        </div>
+      </details>
     </div>
     <div class="modal-actions">
       <button class="btn-action btn-primary" onclick="closeModal('aboutSheet')">Close</button>
@@ -2688,12 +2696,12 @@ details.expander[open] {
     <div class="sos-ring" id="sosRing">
       <svg class="ico ico--coral" aria-hidden="true" style="width:48px;height:48px"><use href="#i-siren" xlink:href="#i-siren"/></svg>
     </div>
-    <h2 class="sos-guard-title">Emergency SOS</h2>
-    <p class="sos-guard-desc">Hold the button for 2 seconds to broadcast an encrypted emergency distress beacon to all reachable peers on the local network.</p>
-    <button class="sos-hold-btn" id="sosHoldBtn" aria-label="Hold to broadcast emergency SOS"
+    <h2 class="sos-guard-title">Emergency alert</h2>
+    <p class="sos-guard-desc">Sends a call for help to xChat users nearby. Hold the button for 2 seconds to send.</p>
+    <button class="sos-hold-btn" id="sosHoldBtn" aria-label="Hold to send emergency alert"
       onmousedown="startSosHold()" onmouseup="cancelSosHold()" onmouseleave="cancelSosHold()"
       ontouchstart="startSosHold()" ontouchend="cancelSosHold()" ontouchcancel="cancelSosHold()">
-      Hold to broadcast (2s)
+      Hold to send alert (2s)
     </button>
     <button class="btn-action btn-cancel" onclick="cancelSos()" style="margin-top:var(--space-3); width:100%">Cancel</button>
   </div>
@@ -2704,6 +2712,51 @@ details.expander[open] {
 
 <script src="jsqr.min.js"></script>
 <script>
+// Plain-English strings dictionary
+const STRINGS = {
+    appName: "xChat",
+    statusConnected: "Connected",
+    statusConnecting: "Looking for contacts…",
+    statusOffline: "Offline",
+    noneFound: "None found",
+    nearbyCount: (n) => `${n} nearby`,
+    emptyChatNotice: (name) => `Chat with <strong>${escapeHtml(name)}</strong> is ready.<br>Send a message to begin.`,
+    securityNotice: (name) => `Only you and ${name} can read these messages.`,
+    toastSosSent: "Emergency alert sent",
+    toastUnreachable: (name) => `Couldn't reach ${name}. Check you're on the same Wi-Fi, then try again.`,
+    toastEnterAddress: "Enter a username or an address.",
+    toastContactExists: (name) => `You already have a contact named "${name}".`,
+    toastConnectedTo: (name) => `Connected to ${name}.`,
+    toastContactAdded: (name) => `Added ${name} to your contacts.`,
+    toastCheckingConnection: (name) => `Checking connection to ${name}…`,
+    toastNoQrFound: "No QR code found in this photo. Try another one.",
+    toastQrReadError: "Couldn't read this image. Try another one.",
+    toastUnrecognizedQr: "This code isn't an xChat contact code.",
+    toastSafetyVerified: "Safety code checked.",
+    toastProfileSaved: "Profile saved.",
+    toastKeysReset: "Security code reset.",
+    toastRoomJoined: (room) => `Joined disappearing room "${room}".`,
+    toastEnterRoomName: "Enter a room name.",
+    toastSmsDemo: "Text message created.",
+    toastAudioDemo: "Playing sound…",
+    toastAudioNotSupported: "Audio not supported on this device.",
+    toastAudioError: "Couldn't play sound.",
+    toastChatDeleted: (name) => `Deleted chat with ${name}.`,
+    toastHiddenRouteEnabled: "Hidden route enabled",
+    toastDetailsCopied: "Details copied",
+    toastAddressCopied: "Address copied",
+    toastContactCardCopied: "Contact card copied",
+    toastSafetyCodeCopied: "Safety code copied",
+    confirmResetKeys: "Your contacts will see a new safety code and may need to check it with you again. Reset now?",
+    confirmDeleteChat: (name) => `Delete chat with ${name}?`,
+    confirmOpenUrl: (url) => `Open this link in your browser?\n\n${url}`
+};
+
+function copyTechnicalDetails() {
+    const text = 'Version: 0.2.0 (Offline-First)\nCore: Rust (xchat-core, xchat-crypto, xchat-transport)\nIcons: Lucide (ISC License), Tabler (MIT License)\nSecurity: Double Ratchet forward secrecy, ChaCha20-Poly1305 authenticated encryption, X3DH key agreement';
+    copyToClip(text, STRINGS.toastDetailsCopied);
+}
+
 // Ensure jsQR is attached to window in all runtime environments
 if (typeof jsQR === 'undefined' && typeof window !== 'undefined' && window.jsQR) {
     var jsQR = window.jsQR;
@@ -2719,13 +2772,13 @@ if (typeof jsQR === 'undefined' && typeof window !== 'undefined' && window.jsQR)
             const btnCon = document.getElementById('qrModeContrastBtn');
             if (btnDes && btnCon) {
                 if (mode === 'designer') {
-                    btnDes.style.background = 'var(--pastel-lavender-dark)';
-                    btnDes.style.color = 'var(--pastel-lavender)';
+                    btnDes.style.background = 'var(--tile-cyan)';
+                    btnDes.style.color = 'var(--ink-cyan)';
                     btnCon.style.background = 'transparent';
                     btnCon.style.color = 'var(--text-muted)';
                 } else {
-                    btnCon.style.background = 'var(--pastel-mint-dark)';
-                    btnCon.style.color = 'var(--pastel-mint)';
+                    btnCon.style.background = 'var(--tile-mint)';
+                    btnCon.style.color = 'var(--ink-mint)';
                     btnDes.style.background = 'transparent';
                     btnDes.style.color = 'var(--text-muted)';
                 }
@@ -3025,7 +3078,7 @@ const EMOJI_CATEGORIES = [["😀", "😃", "😄"]];
 let myIdentity = {
     username: Storage.get('my_username') || '@operator',
     displayName: Storage.get('my_display_name') || 'Mesh Operator',
-    bio: Storage.get('my_bio') || 'Zero Metadata • Direct P2P',
+    bio: Storage.get('my_bio') || 'Available',
     address: Storage.get('my_address') || 'xchat_' + Math.random().toString(16).substring(2, 10),
     reachable: '127.0.0.1:8080',
     fingerprint: 'fp_' + Math.random().toString(16).substring(2, 10),
@@ -3063,9 +3116,9 @@ async function fetchWithTimeout(resource, timeout = 2500, options = {}) {
 }
 
 function formatReachableDisplay(reachable) {
-    if (!reachable || reachable === 'Loading…' || reachable === 'Loading...') return 'Physical BLE Mesh Active';
+    if (!reachable || reachable === 'Loading…' || reachable === 'Loading...') return 'Bluetooth mesh ready';
     if (reachable.startsWith('127.0.0.1')) {
-        return reachable + ' (BLE Mesh)';
+        return reachable + ' (Local)';
     }
     return reachable;
 }
@@ -3148,10 +3201,10 @@ function validatePeerAddress() {
     }
     if (validateSocketAddress(val)) {
         input.classList.remove('invalid');
-        if (hint) { hint.textContent = '✓ Valid IP:port address'; hint.style.color = 'var(--holo-mint)'; }
+        if (hint) { hint.textContent = '✓ Valid address'; hint.style.color = 'var(--holo-mint)'; }
     } else {
         input.classList.add('invalid');
-        if (hint) { hint.textContent = 'Expected format: IP:port (e.g. 192.168.1.15:9400)'; hint.style.color = 'var(--holo-coral)'; }
+        if (hint) { hint.textContent = 'Expected format: address (like 192.168.1.20:4000)'; hint.style.color = 'var(--holo-coral)'; }
     }
 }
 
@@ -3164,7 +3217,7 @@ async function updateStatusChip() {
             const data = await res.json();
             const labelSpan = chip.querySelector('span:last-child');
             const dot = chip.querySelector('.pulse-dot');
-            if (labelSpan) labelSpan.textContent = 'Wi-Fi / LAN';
+            if (labelSpan) labelSpan.textContent = STRINGS.statusConnected;
             if (dot) {
                 dot.style.background = 'var(--holo-mint)';
                 dot.style.boxShadow = 'none';
@@ -3180,7 +3233,7 @@ async function updateStatusChip() {
 function setOfflineStatus(chip) {
     const labelSpan = chip.querySelector('span:last-child');
     const dot = chip.querySelector('.pulse-dot');
-    if (labelSpan) labelSpan.textContent = 'Not connected';
+    if (labelSpan) labelSpan.textContent = STRINGS.statusOffline;
     if (dot) {
         dot.style.background = 'var(--text-3)';
         dot.style.boxShadow = 'none';
@@ -3238,7 +3291,7 @@ function executeSos() {
     if (!isNative) {
         fetch(API_BASE + '/api/sos', { method: 'POST' }).catch(() => {});
     }
-    showToast('Emergency SOS distress beacon broadcasted');
+    showToast(STRINGS.toastSosSent);
     const overlay = document.getElementById('sosGuardOverlay');
     if (overlay) overlay.style.display = 'none';
 }
@@ -3338,10 +3391,9 @@ async function init() {
             'Username:    ' + myIdentity.username + '\n' +
             'Device ID:   ' + myIdentity.address + '\n' +
             'Address:     ' + myIdentity.reachable + '\n' +
-            'Fingerprint: ' + myIdentity.fingerprint + '\n' +
-            'Platform:    ' + (isNative ? 'Android Native (WebView + Socket)' : 'Desktop (Tokio Rust Server)') + '\n' +
-            'Encryption:  X3DH + Double Ratchet + ChaCha20-Poly1305\n' +
-            'Mixnet:      Chaumian Sphinx Onion Routing';
+            'Safety code: ' + (myIdentity.fingerprint ? formatFingerprint(myIdentity.fingerprint) : 'None') + '\n' +
+            'App version: 0.2.0 (Offline-First)\n' +
+            'Status:      Ready';
     }
 
     renderContacts();
@@ -3375,12 +3427,12 @@ function renderNearbyRadar(peers) {
     if (!row) return;
 
     if (countBadge) {
-        countBadge.innerText = `${peers.length} online`;
+        countBadge.innerText = peers.length > 0 ? STRINGS.nearbyCount(peers.length) : STRINGS.noneFound;
         countBadge.style.color = peers.length > 0 ? 'var(--holo-mint)' : 'var(--text-3)';
     }
 
     if (peers.length === 0) {
-        row.innerHTML = '<div style="font-size:11px; color:var(--text-3); padding:4px 2px;">Scanning Wi-Fi &amp; radio peers…</div>';
+        row.innerHTML = '<div style="font-size:11px; color:var(--text-3); padding:4px 2px;">Looking for people nearby…</div>';
         return;
     }
 
@@ -3412,7 +3464,7 @@ function connectToDiscoveredPeer(peer) {
             target: sock,
             fingerprint: peer.fingerprint || '',
             status: 'LAN',
-            last_message: 'Connected via Nearby Radar',
+            last_message: 'Connected nearby',
             last_time: ''
         };
         contacts.push(contact);
@@ -3420,7 +3472,7 @@ function connectToDiscoveredPeer(peer) {
     }
     renderContacts();
     selectContact(contact);
-    showToast(`Connected to ${u}`);
+    showToast(STRINGS.toastConnectedTo(u));
 }
 
 // Contacts & Chats
@@ -3432,17 +3484,35 @@ function renderContacts(filtered) {
     const items = filtered !== null ? filtered : contacts;
 
     if (items.length === 0) {
-        listEl.innerHTML = '<div class="empty-contacts"><p>No conversations yet.</p><p>Tap <strong>+</strong> to start a direct chat.</p></div>';
+        listEl.innerHTML = '<div class="empty-contacts"><p>No chats yet.</p><p>Tap <strong>+</strong> to start a chat.</p></div>';
         return;
     }
 
     items.forEach(c => {
+        let displayName = c.alias;
+        let snippet = c.last_message || c.target || 'Tap to chat';
+        let statusText = c.status || 'LAN';
+
+        if (c.alias === 'Saved Messages') {
+            displayName = 'Personal notes';
+            if (snippet === 'Personal cloud notes & encryption test') snippet = 'Notes to yourself';
+            if (statusText === 'Encrypted Storage') statusText = 'Private';
+        } else if (c.alias === 'xChat Assistant') {
+            displayName = 'AI helper';
+            if (snippet === 'Send a message to test P2P encryption!') snippet = 'Ask questions or practice messaging';
+            if (statusText === 'P2P Mesh AI Assistant') statusText = 'Ready';
+        } else if (statusText === 'Physical BLE Mesh') {
+            statusText = 'Bluetooth';
+        } else if (statusText === 'LAN') {
+            statusText = 'Wi-Fi';
+        }
+
         const card = document.createElement('div');
         card.className = 'contact-card' + (activeContact && activeContact.alias === c.alias ? ' active' : '');
         card.onclick = () => selectContact(c);
         card.setAttribute('role', 'button');
         card.setAttribute('tabindex', '0');
-        card.setAttribute('aria-label', 'Chat with ' + c.alias);
+        card.setAttribute('aria-label', 'Chat with ' + displayName);
         card.onkeydown = (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
@@ -3451,7 +3521,7 @@ function renderContacts(filtered) {
         };
 
         const bg = getAvatarBg(c.alias);
-        const initial = c.alias.replace('@', '').charAt(0).toUpperCase() || '?';
+        const initial = displayName.replace('@', '').charAt(0).toUpperCase() || '?';
 
         card.innerHTML =
             '<div class="contact-avatar" style="background:' + bg + '">' +
@@ -3460,12 +3530,12 @@ function renderContacts(filtered) {
             '</div>' +
             '<div class="contact-meta">' +
                 '<div class="contact-name-row">' +
-                    '<span class="contact-name">' + escapeHtml(c.alias) + '</span>' +
+                    '<span class="contact-name">' + escapeHtml(displayName) + '</span>' +
                     '<span class="contact-time">' + escapeHtml(c.last_time || '') + '</span>' +
                 '</div>' +
                 '<div class="contact-preview-row">' +
-                    '<span class="contact-snippet">' + escapeHtml(c.last_message || c.target || 'Tap to chat') + '</span>' +
-                    '<span class="badge badge-working">' + escapeHtml(c.status || 'LAN') + '</span>' +
+                    '<span class="contact-snippet">' + escapeHtml(snippet) + '</span>' +
+                    '<span class="badge badge-working">' + escapeHtml(statusText) + '</span>' +
                 '</div>' +
             '</div>';
         listEl.appendChild(card);
@@ -3491,27 +3561,34 @@ function selectContact(c) {
     if (emptyState) emptyState.style.display = 'none';
     if (activeView) activeView.style.display = 'flex';
 
+    let displayName = c.alias;
+    if (c.alias === 'Saved Messages') displayName = 'Personal notes';
+    else if (c.alias === 'xChat Assistant') displayName = 'AI helper';
+
     const avatarBox = document.getElementById('activePeerAvatar');
     if (avatarBox) {
-        avatarBox.innerText = c.alias.replace('@', '').charAt(0).toUpperCase() || '?';
+        avatarBox.innerText = displayName.replace('@', '').charAt(0).toUpperCase() || '?';
         avatarBox.style.background = getAvatarBg(c.alias);
     }
     const nameEl = document.getElementById('activePeerName');
-    if (nameEl) nameEl.innerText = c.alias;
+    if (nameEl) nameEl.innerText = displayName;
 
     const statusEl = document.getElementById('activePeerStatus');
-    if (statusEl) statusEl.innerText = c.target ? 'Direct LAN · ' + c.target : 'Connected';
+    if (statusEl) statusEl.innerText = c.target && c.target !== 'local' ? 'Local Wi-Fi · ' + c.target : 'Connected';
+
+    const secNotice = document.getElementById('chatSecurityNotice');
+    if (secNotice) secNotice.textContent = STRINGS.securityNotice(displayName);
 
     const peerTitle = document.getElementById('peerInfoTitle');
-    if (peerTitle) peerTitle.textContent = c.alias;
+    if (peerTitle) peerTitle.textContent = displayName;
 
     const peerBody = document.getElementById('peerInfoBody');
     if (peerBody) {
         peerBody.innerText =
-            'Alias:     ' + c.alias + '\n' +
-            'Address:   ' + (c.target || 'Unknown') + '\n' +
-            'Transport: Local Wi-Fi (TCP Direct)\n' +
-            'Security:  Double Ratchet (Forward Secret)';
+            'Name:        ' + displayName + '\n' +
+            'Address:     ' + (c.target || 'None') + '\n' +
+            'Way to send: Local Wi-Fi\n' +
+            'Security:    Private and locked';
     }
 
     document.body.classList.add('chat-open');
@@ -3576,9 +3653,12 @@ function renderMessages() {
 
     const history = chatHistories[activeContact.alias] || [];
     if (history.length === 0) {
+        let displayName = activeContact.alias;
+        if (activeContact.alias === 'Saved Messages') displayName = 'Personal notes';
+        else if (activeContact.alias === 'xChat Assistant') displayName = 'AI helper';
         const notice = document.createElement('div');
         notice.className = 'empty-chat-notice';
-        notice.innerHTML = 'Direct encrypted connection with <strong>' + escapeHtml(activeContact.alias) + '</strong> ready.<br>Send a message to begin.';
+        notice.innerHTML = STRINGS.emptyChatNotice(displayName);
         area.appendChild(notice);
     } else {
         history.forEach(m => {
@@ -3648,7 +3728,7 @@ async function sendCurrentMessage() {
                 })
             });
         } catch(e) {
-            showToast('Unable to send: peer unreachable on network', true);
+            showToast(STRINGS.toastUnreachable(activeContact.alias === 'Saved Messages' ? 'Personal notes' : activeContact.alias), true);
         }
     }
 }
@@ -3682,7 +3762,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
             return;
         }
 
-        const text = data.text || data.message || (data.ciphertext ? '[Encrypted Message]' : '');
+        const text = data.text || data.message || (data.ciphertext ? '[Message]' : '');
         const timeStr = data.time_str || data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         if (!text) return;
@@ -3763,7 +3843,7 @@ function onSmartPeerInputChanged(val) {
 
     if (!raw) {
         if (feedback) {
-            feedback.innerText = 'Enter a peer @username or paste an invite link.';
+            feedback.innerText = STRINGS.toastEnterAddress;
             feedback.style.color = 'var(--text-3)';
         }
         return;
@@ -3774,9 +3854,9 @@ function onSmartPeerInputChanged(val) {
         smartResolvedTarget = parsed.target;
         smartResolvedPeer = parsed;
         if (targetField) targetField.value = parsed.target;
-        if (aliasField && !aliasField.value) aliasField.value = parsed.username || 'Peer';
+        if (aliasField && !aliasField.value) aliasField.value = parsed.username || 'Contact';
         if (feedback) {
-            feedback.innerText = `✓ Valid invite for ${parsed.username} (${parsed.target})`;
+            feedback.innerText = `✓ Ready to add ${parsed.username}`;
             feedback.style.color = 'var(--holo-mint)';
         }
         return;
@@ -3786,7 +3866,7 @@ function onSmartPeerInputChanged(val) {
         smartResolvedTarget = raw;
         if (targetField) targetField.value = raw;
         if (feedback) {
-            feedback.innerText = `✓ Valid IP:Port socket: ${raw}`;
+            feedback.innerText = `✓ Valid address: ${raw}`;
             feedback.style.color = 'var(--holo-mint)';
         }
         return;
@@ -3794,14 +3874,14 @@ function onSmartPeerInputChanged(val) {
 
     if (raw.startsWith('@')) {
         if (feedback) {
-            feedback.innerText = `Connecting via mesh username: ${raw}`;
+            feedback.innerText = `Connecting to ${raw}`;
             feedback.style.color = 'var(--holo-cyan)';
         }
         return;
     }
 
     if (feedback) {
-        feedback.innerText = `Using direct peer alias: ${raw}`;
+        feedback.innerText = `Using name: ${raw}`;
         feedback.style.color = 'var(--text-2)';
     }
 }
@@ -3818,12 +3898,12 @@ function confirmSmartConnect() {
     const bundle = (bundleInput ? bundleInput.value.trim() : '');
 
     if (!raw && !alias && !target) {
-        showToast('Please enter a @username or socket address', true);
+        showToast(STRINGS.toastEnterAddress, true);
         return;
     }
 
     if (!alias) {
-        alias = raw.startsWith('@') ? raw : (raw || 'Peer');
+        alias = raw.startsWith('@') ? raw : (raw || 'Contact');
     }
 
     if (!target) {
@@ -3831,7 +3911,7 @@ function confirmSmartConnect() {
     }
 
     if (contacts.find(c => c.alias.toLowerCase() === alias.toLowerCase())) {
-        showToast(`A contact named "${alias}" already exists`, true);
+        showToast(STRINGS.toastContactExists(alias), true);
         return;
     }
 
@@ -3863,7 +3943,7 @@ function confirmSmartConnect() {
     if (aliasInput) aliasInput.value = '';
     if (targetInput) targetInput.value = '';
     if (bundleInput) bundleInput.value = '';
-    showToast(`Connected to ${alias}`);
+    showToast(STRINGS.toastContactAdded(alias));
 }
 
 function confirmAddPeer() {
@@ -3883,20 +3963,16 @@ function pingActivePeer() {
         })
         .then(r => r.json())
         .then(d => {
-            showToast(`${activeContact.alias} reachable · ${d.latency_ms || 12}ms`);
+            showToast(STRINGS.toastConnectedTo(activeContact.alias));
         })
         .catch(() => {
-            showToast(`${activeContact.alias} latency test sent`);
+            showToast(STRINGS.toastCheckingConnection(activeContact.alias));
         });
     }
 }
 
 window.onPingCallback = function(cbId, latency) {
-    if (latency >= 0) {
-        showToast(`Peer reachable · ${latency}ms`);
-    } else {
-        showToast('Ping response received');
-    }
+    showToast(STRINGS.toastConnectedTo('contact'));
 };
 
 // QR Designer
@@ -4082,11 +4158,11 @@ function handleQrImageUpload(event) {
                 if (detectedData) {
                     onQrCodeDetected(detectedData);
                 } else {
-                    showToast("No QR code detected. Try another photo.", true);
-                    if (status) status.innerText = "No QR code detected. Try another photo.";
+                    showToast(STRINGS.toastNoQrFound, true);
+                    if (status) status.innerText = STRINGS.toastNoQrFound;
                 }
             } catch(err) {
-                showToast("Error decoding image: " + err.message, true);
+                showToast(STRINGS.toastQrReadError, true);
             }
         };
         img.src = e.target.result;
@@ -4103,12 +4179,12 @@ function onQrCodeDetected(rawData) {
 
     const parsed = parseInvitePayload(rawData);
     if (!parsed) {
-        showToast("⚠️ Scanned code is not a recognized xChat invite", true);
+        showToast(STRINGS.toastUnrecognizedQr, true);
         return;
     }
 
     if (parsed.isUrl) {
-        if (confirm('Scanned URL:\n' + parsed.url + '\n\nOpen link in browser?')) {
+        if (confirm(STRINGS.confirmOpenUrl(parsed.url))) {
             window.open(parsed.url, '_blank');
         }
         return;
@@ -4117,26 +4193,26 @@ function onQrCodeDetected(rawData) {
     let existing = contacts.find(c => (parsed.username && c.alias === parsed.username) || (parsed.target && c.target === parsed.target));
     if (!existing) {
         existing = {
-            alias: parsed.username || 'Peer',
+            alias: parsed.username || 'Contact',
             target: parsed.target || 'ble:mesh',
             fingerprint: parsed.fingerprint || '',
             address: parsed.address || '',
-            status: 'Linked via QR',
-            last_message: 'Pairing verified via Air-Gap QR',
+            status: 'Ready',
+            last_message: 'Added via QR code',
             last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
         contacts.push(existing);
     } else {
         if (parsed.target) existing.target = parsed.target;
         if (parsed.fingerprint) existing.fingerprint = parsed.fingerprint;
-        existing.status = 'Linked via QR';
+        existing.status = 'Ready';
     }
 
     Storage.set('contacts', JSON.stringify(contacts));
     renderContacts();
     selectContact(existing);
 
-    showToast('Successfully paired with ' + existing.alias + ' via Air-Gap QR!');
+    showToast(STRINGS.toastContactAdded(existing.alias));
 }
 
 // Safety Verification
@@ -4150,21 +4226,21 @@ function openSafetyVerificationModal() {
     if (emojiEl) emojiEl.innerText = getVisualFingerprintEmojis(fp);
 
     const hexEl = document.getElementById('safetyHexDisplay');
-    if (hexEl) hexEl.innerText = fp;
+    if (hexEl) hexEl.innerText = formatFingerprint(fp);
 
     openModal('safetyVerificationModal');
 }
 
 function markPeerAsVerified() {
     if (!activeContact) return;
-    activeContact.status = 'Verified ✓';
+    activeContact.status = 'Checked ✓';
     Storage.set('contacts', JSON.stringify(contacts));
     renderContacts();
     const statusEl = document.getElementById('activePeerStatus');
-    if (statusEl) statusEl.innerText = 'Double Ratchet Verified ✓';
+    if (statusEl) statusEl.innerText = 'Safety code checked ✓';
     closeModal('safetyVerificationModal');
     SoundFX.playReceive();
-    showToast(`Safety code for ${activeContact.alias} verified ✓`);
+    showToast(STRINGS.toastSafetyVerified);
 }
 
 // Profile Customizer
@@ -4174,7 +4250,7 @@ function populateProfileModal() {
     const bInput = document.getElementById('profileBioInput');
     if (uInput) uInput.value = myIdentity.username || '@operator';
     if (dInput) dInput.value = myIdentity.displayName || 'Mesh Operator';
-    if (bInput) bInput.value = myIdentity.bio || 'Zero Metadata • Direct P2P';
+    if (bInput) bInput.value = myIdentity.bio || 'Available';
     selectAvatarColor(myIdentity.avatarIndex || 0);
 }
 
@@ -4192,7 +4268,7 @@ async function saveUserProfile() {
     if (!uVal.startsWith('@')) uVal = '@' + uVal;
 
     let dVal = (document.getElementById('profileDisplayNameInput')?.value || '').trim() || 'Mesh Operator';
-    let bVal = (document.getElementById('profileBioInput')?.value || '').trim() || 'Zero Metadata • Direct P2P';
+    let bVal = (document.getElementById('profileBioInput')?.value || '').trim() || 'Available';
 
     myIdentity.username = uVal;
     myIdentity.displayName = dVal;
@@ -4226,7 +4302,7 @@ async function saveUserProfile() {
     updateProfileHeaderBadge();
     updateQrDisplay();
     closeModal('profileModal');
-    showToast('Profile updated: ' + uVal);
+    showToast(STRINGS.toastProfileSaved);
     if (window.AndroidBridge && window.AndroidBridge.toast) {
         window.AndroidBridge.toast('Profile updated: ' + uVal);
     }
@@ -4248,6 +4324,7 @@ function onProfileUsernameChanged(val) {}
 function onProfileDisplayNameChanged(val) {}
 
 async function createNewIdentity() {
+    if (!confirm(STRINGS.confirmResetKeys)) return;
     try {
         let newKeys = null;
         if (window.AndroidBridge && window.AndroidBridge.generateNewKeys) {
@@ -4285,9 +4362,9 @@ async function createNewIdentity() {
             populateProfileModal();
             updateQrDisplay();
             updateProfileHeaderBadge();
-            showToast('✨ Fresh cryptographic keys generated & persisted!');
+            showToast(STRINGS.toastKeysReset);
             if (window.AndroidBridge && window.AndroidBridge.toast) {
-                window.AndroidBridge.toast('✨ Fresh cryptographic keys generated!');
+                window.AndroidBridge.toast(STRINGS.toastKeysReset);
             }
             if (window.AndroidBridge && window.AndroidBridge.vibrate) {
                 window.AndroidBridge.vibrate(30);
@@ -4296,11 +4373,11 @@ async function createNewIdentity() {
             myIdentity.address = 'xchat_' + Math.random().toString(16).substring(2, 10);
             myIdentity.fingerprint = 'fp_' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
             Storage.set('my_address', myIdentity.address);
-            showToast('New cryptographic keypair generated');
+            showToast(STRINGS.toastKeysReset);
             updateQrDisplay();
         }
     } catch(e) {
-        showToast('Key generation failed: ' + e.message, true);
+        showToast('Could not reset code: ' + e.message, true);
     }
 }
 
@@ -4349,19 +4426,19 @@ function insertEmoji(char) {
 
 // Copy Utilities
 function copyMySocket() {
-    copyToClip(myIdentity.reachable, 'Address copied to clipboard');
+    copyToClip(myIdentity.reachable, STRINGS.toastAddressCopied);
 }
 
 function copyIdentityPayload() {
-    copyToClip(JSON.stringify(myIdentity, null, 2), 'Identity details copied to clipboard');
+    copyToClip(JSON.stringify(myIdentity, null, 2), STRINGS.toastContactCardCopied);
 }
 
 function copyFingerprint() {
-    copyToClip(myIdentity.fingerprint || '', 'Fingerprint copied to clipboard');
+    copyToClip(myIdentity.fingerprint || '', STRINGS.toastSafetyCodeCopied);
 }
 
 function copyInviteUrl() {
-    copyToClip(generateInviteUri(), 'Invite link copied to clipboard');
+    copyToClip(generateInviteUri(), 'Invite link copied');
 }
 
 function copyToClip(text, msg) {
@@ -4378,10 +4455,10 @@ function enterBurnerRoom() {
     const modalInput = document.getElementById('burnerRoomInputModal');
     const room = (roomInput ? roomInput.value.trim() : '') || (modalInput ? modalInput.value.trim() : '');
     if (!room) {
-        showToast('Please enter a room name', true);
+        showToast(STRINGS.toastEnterRoomName, true);
         return;
     }
-    showToast(`Joined ephemeral room "${room}" (RAM only)`);
+    showToast(STRINGS.toastRoomJoined(room));
     closeModal('burnerModal');
 }
 
@@ -4394,13 +4471,13 @@ function generateSmsFrameDemo() {
         el.style.display = 'block';
         el.innerText = frame;
     }
-    showToast('SMS frame generated (140-char cellular demo)');
+    showToast(STRINGS.toastSmsDemo);
 }
 
 function playAcousticTones() {
     try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (!AudioCtx) { showToast('Audio context not supported', true); return; }
+        if (!AudioCtx) { showToast(STRINGS.toastAudioNotSupported, true); return; }
         const ctx = new AudioCtx();
         const now = ctx.currentTime;
         const osc = ctx.createOscillator();
@@ -4418,16 +4495,17 @@ function playAcousticTones() {
         gain.gain.setValueAtTime(0, time);
         osc.start(now);
         osc.stop(time + 0.1);
-        showToast('Transmitting AFSK audio packet (Bell 202 tones)…');
+        showToast(STRINGS.toastAudioDemo);
     } catch(e) {
-        showToast('Audio synthesis error: ' + e.message, true);
+        showToast(STRINGS.toastAudioError, true);
     }
 }
 
 function deleteActivePeer() {
     if (!activeContact) return;
     const alias = activeContact.alias;
-    if (confirm('Remove conversation and peer keys for ' + alias + '?')) {
+    const displayName = alias === 'Saved Messages' ? 'Personal notes' : (alias === 'xChat Assistant' ? 'AI helper' : alias);
+    if (confirm(STRINGS.confirmDeleteChat(displayName))) {
         contacts = contacts.filter(c => c.alias !== alias);
         delete chatHistories[alias];
         Storage.set('contacts', JSON.stringify(contacts));
@@ -4442,7 +4520,7 @@ function deleteActivePeer() {
 
         closeModal('peerInfoModal');
         closeChatMobile();
-        showToast('Removed ' + alias);
+        showToast(STRINGS.toastChatDeleted(displayName));
     }
 }
 
