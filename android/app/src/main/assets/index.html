@@ -2783,8 +2783,43 @@ let myIdentity = {
 let contacts = JSON.parse(Storage.get('contacts') || '[]');
 let activeContact = null;
 let chatHistories = JSON.parse(Storage.get('chat_histories') || '{}');
-let isNative = !!(window.AndroidBridge && window.AndroidBridge.isNativeAndroid);
-const API_BASE = (window.location.protocol === 'file:') ? 'http://127.0.0.1:4000' : '';
+
+function isAndroid() {
+    return !!(
+        (typeof window !== 'undefined' && window.AndroidBridge) ||
+        (typeof window !== 'undefined' && window.location && (window.location.protocol === 'file:' || (window.location.href && window.location.href.includes('android_asset'))))
+    );
+}
+
+async function fetchWithTimeout(resource, timeout = 2500, options = {}) {
+    if (typeof AbortController === 'undefined') {
+        return fetch(resource, options);
+    }
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(resource, {
+            ...options,
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+}
+
+function formatReachableDisplay(reachable) {
+    if (!reachable || reachable === 'Loading…' || reachable === 'Loading...') return 'Physical BLE Mesh Active';
+    if (reachable.startsWith('127.0.0.1')) {
+        return reachable + ' (BLE Mesh)';
+    }
+    return reachable;
+}
+
+let isNative = isAndroid();
+const API_BASE = '';
 
 let selectedAvatarIndex = 0;
 let smartResolvedTarget = null;
@@ -2958,7 +2993,9 @@ function executeSos() {
 
 // App Init
 async function init() {
-    if (isNative && window.AndroidBridge) {
+    isNative = isAndroid();
+    if (isAndroid()) {
+        if (window.AndroidBridge) {
         try {
             const reachable = window.AndroidBridge.getReachableAddress();
             if (reachable) myIdentity.reachable = reachable;
@@ -2997,10 +3034,11 @@ async function init() {
             if (myIdentity.signPubkey) Storage.set('my_sign_pubkey', myIdentity.signPubkey);
             if (myIdentity.dhPubkey) Storage.set('my_dh_pubkey', myIdentity.dhPubkey);
         } catch(e) {}
+        }
     } else {
         try {
-            const res = await fetch(API_BASE + '/api/identity');
-            if (res.ok) {
+            const res = await fetchWithTimeout(API_BASE + '/api/identity', 2500);
+            if (res && res.ok) {
                 const data = await res.json();
                 myIdentity.address = data.address || myIdentity.address;
                 myIdentity.fingerprint = data.fingerprint || myIdentity.fingerprint;
@@ -3012,8 +3050,8 @@ async function init() {
         } catch(e) {}
 
         try {
-            const res = await fetch(API_BASE + '/api/contacts');
-            if (res.ok) {
+            const res = await fetchWithTimeout(API_BASE + '/api/contacts', 2500);
+            if (res && res.ok) {
                 const srvContacts = await res.json();
                 if (srvContacts && srvContacts.length > 0) {
                     contacts = srvContacts;
@@ -3025,13 +3063,13 @@ async function init() {
 
     // Update UI elements
     const socketEl = document.getElementById('myReachableSocket');
-    if (socketEl) socketEl.innerText = myIdentity.reachable;
+    if (socketEl) socketEl.innerText = formatReachableDisplay(myIdentity.reachable);
 
     const qrSide = document.getElementById('qrPayloadDisplaySide');
     if (qrSide) qrSide.innerText = JSON.stringify(myIdentity, null, 2);
 
     const meAddr = document.getElementById('meAddress');
-    if (meAddr) meAddr.textContent = myIdentity.reachable;
+    if (meAddr) meAddr.textContent = formatReachableDisplay(myIdentity.reachable);
 
     const meFp = document.getElementById('meFingerprint');
     if (meFp) meFp.textContent = formatFingerprint(myIdentity.fingerprint);
@@ -3896,7 +3934,7 @@ function selectAvatarColor(index) {
     }
 }
 
-function saveUserProfile() {
+async function saveUserProfile() {
     let uVal = (document.getElementById('profileUsernameInput')?.value || '').trim();
     if (!uVal) uVal = '@operator';
     if (!uVal.startsWith('@')) uVal = '@' + uVal;
@@ -3914,10 +3952,32 @@ function saveUserProfile() {
     Storage.set('my_bio', bVal);
     Storage.set('my_avatar_index', String(selectedAvatarIndex));
 
+    if (!isAndroid()) {
+        try {
+            await fetchWithTimeout(API_BASE + '/api/profile', 2500, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    username: uVal,
+                    display_name: dVal,
+                    bio: bVal,
+                    avatar_color: String(selectedAvatarIndex)
+                })
+            });
+        } catch(e) {}
+    } else if (window.AndroidBridge && window.AndroidBridge.updateDiscoveryProfile) {
+        try {
+            window.AndroidBridge.updateDiscoveryProfile(uVal, dVal, myIdentity.address, myIdentity.fingerprint);
+        } catch(e) {}
+    }
+
     updateProfileHeaderBadge();
     updateQrDisplay();
     closeModal('profileModal');
-    showToast('Profile updated');
+    showToast('Profile updated: ' + uVal);
+    if (window.AndroidBridge && window.AndroidBridge.toast) {
+        window.AndroidBridge.toast('Profile updated: ' + uVal);
+    }
 }
 
 function updateProfileHeaderBadge() {
@@ -3935,12 +3995,61 @@ function updateProfileHeaderBadge() {
 function onProfileUsernameChanged(val) {}
 function onProfileDisplayNameChanged(val) {}
 
-function createNewIdentity() {
-    myIdentity.address = 'xchat_' + Math.random().toString(16).substring(2, 10);
-    myIdentity.fingerprint = 'fp_' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
-    Storage.set('my_address', myIdentity.address);
-    showToast('New cryptographic keypair generated');
-    updateQrDisplay();
+async function createNewIdentity() {
+    try {
+        let newKeys = null;
+        if (window.AndroidBridge && window.AndroidBridge.generateNewKeys) {
+            const raw = window.AndroidBridge.generateNewKeys();
+            newKeys = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        } else if (!isAndroid()) {
+            const res = await fetchWithTimeout(API_BASE + '/api/keygen', 2500, { method: 'POST' });
+            if (res && res.ok) {
+                newKeys = await res.json();
+            }
+        }
+
+        if (newKeys && (newKeys.address || newKeys.status === 'generated')) {
+            myIdentity.address = newKeys.address;
+            myIdentity.fingerprint = newKeys.fingerprint || myIdentity.fingerprint;
+            myIdentity.visualFingerprint = newKeys.visual_fingerprint || getVisualFingerprintEmojis(myIdentity.fingerprint);
+            myIdentity.signPubkey = newKeys.sign_pubkey || '';
+            myIdentity.dhPubkey = newKeys.dh_pubkey || '';
+
+            Storage.set('my_address', myIdentity.address);
+            Storage.set('my_fingerprint', myIdentity.fingerprint);
+            if (myIdentity.signPubkey) Storage.set('my_sign_pubkey', myIdentity.signPubkey);
+            if (myIdentity.dhPubkey) Storage.set('my_dh_pubkey', myIdentity.dhPubkey);
+
+            if (window.AndroidBridge && window.AndroidBridge.updateDiscoveryProfile) {
+                try {
+                    window.AndroidBridge.updateDiscoveryProfile(
+                        myIdentity.username,
+                        myIdentity.displayName,
+                        myIdentity.address,
+                        myIdentity.fingerprint
+                    );
+                } catch(e) {}
+            }
+            populateProfileModal();
+            updateQrDisplay();
+            updateProfileHeaderBadge();
+            showToast('✨ Fresh cryptographic keys generated & persisted!');
+            if (window.AndroidBridge && window.AndroidBridge.toast) {
+                window.AndroidBridge.toast('✨ Fresh cryptographic keys generated!');
+            }
+            if (window.AndroidBridge && window.AndroidBridge.vibrate) {
+                window.AndroidBridge.vibrate(30);
+            }
+        } else {
+            myIdentity.address = 'xchat_' + Math.random().toString(16).substring(2, 10);
+            myIdentity.fingerprint = 'fp_' + Array.from(crypto.getRandomValues(new Uint8Array(16))).map(b => b.toString(16).padStart(2, '0')).join('');
+            Storage.set('my_address', myIdentity.address);
+            showToast('New cryptographic keypair generated');
+            updateQrDisplay();
+        }
+    } catch(e) {
+        showToast('Key generation failed: ' + e.message, true);
+    }
 }
 
 // Emoji Drawer
@@ -4156,7 +4265,9 @@ function escapeHtml(text) {
     return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-window.onload = init;
+window.addEventListener("load", init);
+setTimeout(init, 200);
+setTimeout(init, 800);
 </script>
 </body>
 </html>

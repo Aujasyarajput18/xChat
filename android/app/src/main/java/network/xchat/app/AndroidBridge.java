@@ -464,10 +464,24 @@ public class AndroidBridge {
     @JavascriptInterface
     public String getLocalIpAddress() {
         try {
+            WifiManager wm = (WifiManager) activity.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null && wm.getConnectionInfo() != null) {
+                int ipInt = wm.getConnectionInfo().getIpAddress();
+                if (ipInt != 0) {
+                    return String.format(java.util.Locale.US, "%d.%d.%d.%d",
+                        (ipInt & 0xff),
+                        (ipInt >> 8 & 0xff),
+                        (ipInt >> 16 & 0xff),
+                        (ipInt >> 24 & 0xff));
+                }
+            }
+        } catch (Exception ignored) {}
+
+        try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             while (interfaces.hasMoreElements()) {
                 NetworkInterface iface = interfaces.nextElement();
-                if (iface.isLoopback() || !iface.isUp()) continue;
+                if (iface.isLoopback()) continue;
                 Enumeration<InetAddress> addrs = iface.getInetAddresses();
                 while (addrs.hasMoreElements()) {
                     InetAddress addr = addrs.nextElement();
@@ -482,7 +496,8 @@ public class AndroidBridge {
 
     @JavascriptInterface
     public String getReachableAddress() {
-        return getLocalIpAddress() + ":" + listenPort;
+        int port = (serverSocket != null && serverSocket.isBound()) ? serverSocket.getLocalPort() : listenPort;
+        return getLocalIpAddress() + ":" + port;
     }
 
     @JavascriptInterface
