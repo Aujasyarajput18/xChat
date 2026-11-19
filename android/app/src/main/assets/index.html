@@ -4,43 +4,49 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>xChat — Decentralized Private Messenger</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 108 108' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='ga' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237dd3fc'/%3E%3Cstop offset='1' stop-color='%235eead0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='108' height='108' rx='22' fill='%23090d16'/%3E%3Cg fill='none' stroke='url(%23ga)' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M54,16 L84,32 L84,68 L54,88 L24,68 L24,32 Z'/%3E%3Cpath d='M40,40 L68,68 M68,40 L40,68' stroke-width='3.5'/%3E%3C/g%3E%3Cg fill='url(%23ga)'%3E%3Ccircle cx='40' cy='40' r='4.2'/%3E%3Ccircle cx='68' cy='40' r='4.2'/%3E%3Ccircle cx='40' cy='68' r='4.2'/%3E%3Ccircle cx='68' cy='68' r='4.2'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 108 108' fill='none'%3E%3Cdefs%3E%3ClinearGradient id='ga' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237dd3fc'/%3E%3Cstop offset='1' stop-color='%235eead0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='108' height='108' rx='22' fill='%23090d16'/%3E%3Cg fill='none' stroke='url(%23ga)' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M54,16 L84,32 L84,68 L54,88 L24,68 L24,32 Z'/%3E%3Cpath d='M40,40 L68,68 M68,40 L40,68' stroke-width='3.5'/%3E%3C/g%3E%3Cg fill='url(%23ga)'%3E%3Ccircle cx='40' cy='40' r='4.2'/%3E%3Ccircle cx='68' cy='40' r='4.2'/%3E%3Ccircle cx='40' cy='68' r='4.2'/%3E%3Ccircle cx='68' cy='68' r='4.2'/%3E%3C/g%3E%3C/svg%3E">
   <!-- Fully Offline: No CDN fonts or scripts loaded. System font stacks applied. -->
   <style>
 /* ==================== DESIGN TOKENS ==================== */
 :root {
   --bg-0: #0A0E13;
-  --bg-surface: #11171E;
-  --bg-raised: #18212B;
-  --bg-input: #0E1319;
-  --bg-hover: rgba(255, 255, 255, 0.04);
-  
-  --border-hairline: rgba(140, 200, 220, 0.14);
-  --border-subtle: rgba(140, 200, 220, 0.08);
-  --border-focus: rgba(94, 231, 240, 0.45);
-  
+  --surface: #11171E;
+  --raised: #18212B;
+  --hairline: rgba(140, 200, 220, 0.14);
   --text-1: #E6EEF5;
   --text-2: #9FB0BF;
   --text-3: #6B7D8D;
   --text-disabled: rgba(230, 238, 245, 0.3);
-  
-  --holo-cyan: #5EE7F0;
-  --holo-mint: #6BF2B3;
+
+  --holo-cyan: #38BDF8;
+  --holo-mint: #5EEAD0;
   --holo-amber: #FFC857;
   --holo-coral: #FF6B6B;
-  --holo-violet: #B495FF;
+  --holo-violet: #A78BFA;
+  --holo-grey: #5B6B7A;
+
+  --bg-surface: var(--surface);
+  --bg-raised: var(--raised);
+  --bg-input: #0E1319;
+  --bg-hover: rgba(255, 255, 255, 0.04);
   
-  --glow-cyan: rgba(94, 231, 240, 0.4);
-  --glow-mint: rgba(107, 242, 179, 0.4);
+  --border-hairline: var(--hairline);
+  --border-subtle: rgba(140, 200, 220, 0.08);
+  --border-focus: rgba(56, 189, 248, 0.45);
+
+  --glow-cyan: rgba(56, 189, 248, 0.4);
+  --glow-mint: rgba(94, 234, 208, 0.4);
   --glow-amber: rgba(255, 200, 87, 0.4);
   --glow-coral: rgba(255, 107, 107, 0.4);
-  --glow-violet: rgba(180, 149, 255, 0.4);
-  
+  --glow-violet: rgba(167, 139, 250, 0.4);
+
   --bubble-in-bg: #151B23;
   --bubble-in-border: rgba(140, 200, 220, 0.12);
   --bubble-out-bg: #1A2A3A;
-  --bubble-out-border: rgba(94, 231, 240, 0.2);
+  --bubble-out-border: rgba(56, 189, 248, 0.2);
   --bubble-out-accent: var(--holo-cyan);
-  
+
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -48,36 +54,24 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  
+
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 20px;
   --radius-pill: 9999px;
-  
+
   --shadow-low: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-high: 0 8px 32px rgba(0, 0, 0, 0.6);
-  
-  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
-  
-  --text-xs: 0.75rem;    /* 12px */
-  --text-sm: 0.8125rem;  /* 13px */
-  --text-base: 0.875rem; /* 14px */
-  --text-md: 1rem;       /* 16px */
-  --text-lg: 1.125rem;   /* 18px */
-  --text-xl: 1.25rem;    /* 20px */
-  --text-2xl: 1.5rem;    /* 24px */
-  
-  --duration-fast: 100ms;
-  --duration-normal: 150ms;
-  --duration-slow: 200ms;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 400ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  
   --nav-height: 64px;
-  --sidebar-width: 360px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* ==================== RESET & BASE ==================== */
@@ -144,32 +138,136 @@ input, textarea {
 
 /* ==================== HOLO ICONS ==================== */
 .ico {
-  width: 20px;
-  height: 20px;
-  stroke: currentColor;
+  width: 24px;
+  height: 24px;
   fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: .75;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--glow, currentColor) 45%, transparent));
+  transition: opacity .2s ease, filter .2s ease;
   vertical-align: middle;
-  filter: drop-shadow(0 0 4px var(--glow-cyan));
-  opacity: 0.85;
-  transition: opacity var(--duration-normal) var(--ease-out), filter var(--duration-normal) var(--ease-out), transform var(--duration-normal) var(--ease-out);
   flex-shrink: 0;
 }
 
-.ico-sm { width: 16px; height: 16px; }
-.ico-lg { width: 24px; height: 24px; }
-.ico-xl { width: 32px; height: 32px; }
+.ico-sm { width: 18px; height: 18px; }
+.ico-lg { width: 32px; height: 32px; }
+.ico-xl { width: 48px; height: 48px; }
 
+.ico--cyan {
+  stroke: url(#holo-cyan);
+  color: var(--holo-cyan);
+  --glow: var(--holo-cyan);
+}
+.ico--mint {
+  stroke: url(#holo-mint);
+  color: var(--holo-mint);
+  --glow: var(--holo-mint);
+}
+.ico--amber {
+  stroke: url(#holo-amber);
+  color: var(--holo-amber);
+  --glow: var(--holo-amber);
+}
+.ico--coral {
+  stroke: url(#holo-coral);
+  color: var(--holo-coral);
+  --glow: var(--holo-coral);
+}
+.ico--violet {
+  stroke: url(#holo-violet);
+  color: var(--holo-violet);
+  --glow: var(--holo-violet);
+}
+.ico--grey, .ico--muted {
+  stroke: var(--holo-grey);
+  color: var(--holo-grey);
+  --glow: var(--holo-grey);
+}
+
+.ico:hover,
+.ico:focus,
+.nav-tab:hover .ico,
+.btn-action:hover .ico,
+.btn-send:hover .ico,
 button:hover .ico,
 button:focus-visible .ico {
   opacity: 1;
-  filter: drop-shadow(0 0 6px currentColor);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--glow, currentColor) 45%, transparent))
+          drop-shadow(0 0 12px color-mix(in srgb, var(--glow, currentColor) 25%, transparent));
 }
 
-button:disabled .ico {
-  opacity: 0.3;
+.nav-tab.active .ico {
+  opacity: 1;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--glow, currentColor) 60%, transparent))
+          drop-shadow(0 0 14px color-mix(in srgb, var(--glow, currentColor) 30%, transparent));
+}
+
+.ico[disabled],
+:disabled .ico,
+button:disabled .ico,
+.ico--dim {
+  opacity: .3;
   filter: none;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .ico {
+    transition: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .ico {
+    filter: none !important;
+  }
+  .ico--cyan   { stroke: var(--holo-cyan); }
+  .ico--mint   { stroke: var(--holo-mint); }
+  .ico--amber  { stroke: var(--holo-amber); }
+  .ico--coral  { stroke: var(--holo-coral); }
+  .ico--violet { stroke: var(--holo-violet); }
+}
+
+/* Glass Tile for Navigation Items */
+.ico-tile, .glass-tile {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--glow, var(--holo-cyan)) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--glow, var(--holo-cyan)) 26%, transparent);
+  display: grid;
+  place-items: center;
+  transition: all var(--duration-fast) var(--ease-out);
+  flex-shrink: 0;
+}
+
+.ico-tile .ico, .glass-tile .ico {
+  width: 22px;
+  height: 22px;
+}
+
+.nav-tab.active .ico-tile,
+.nav-tab.active .glass-tile {
+  background: color-mix(in srgb, var(--glow, var(--holo-cyan)) 16%, transparent);
+  border-color: color-mix(in srgb, var(--glow, var(--holo-cyan)) 55%, transparent);
+}
+
+/* Header Brand Logo Option A */
+.header-logo {
+  width: 30px;
+  height: 30px;
+  filter: drop-shadow(0 0 6px rgba(94, 234, 208, 0.45));
+  flex-shrink: 0;
+}
+.app-wordmark {
+  font-family: var(--font-sans);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-1);
+}
 /* ==================== APP HEADER ==================== */
 header {
   height: 56px;
@@ -1734,55 +1832,96 @@ details.expander[open] {
 </head>
 <body>
 
-<!-- HOLO ICON SPRITE (34 Lucide-based Symbols) -->
-<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+<!-- HOLO ICON SPRITE (36 Lucide Symbols) -->
+<svg style="display:none" aria-hidden="true">
   <defs>
-    <linearGradient id="holo-sheen" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="currentColor" stop-opacity="1.0"/>
-      <stop offset="100%" stop-color="currentColor" stop-opacity="0.65"/>
+    <linearGradient id="holo-cyan" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
+      <stop offset="0%" stop-color="#7dd3fc"/>
+      <stop offset="50%" stop-color="#38bdf8"/>
+      <stop offset="100%" stop-color="#0284c7"/>
+    </linearGradient>
+    <linearGradient id="holo-mint" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
+      <stop offset="0%" stop-color="#a7f3d0"/>
+      <stop offset="50%" stop-color="#5eead0"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+    <linearGradient id="holo-amber" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="50%" stop-color="#ffc857"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="holo-coral" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
+      <stop offset="0%" stop-color="#fca5a5"/>
+      <stop offset="50%" stop-color="#ff6b6b"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="holo-violet" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
+      <stop offset="0%" stop-color="#c4b5fd"/>
+      <stop offset="50%" stop-color="#a78bfa"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
     </linearGradient>
   </defs>
-  <symbol id="ico-chat" viewBox="0 0 24 24"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-network" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M1.42 9a16 16 0 0 1 21.16 0" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><line x1="12" y1="20" x2="12.01" y2="20" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="ico-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M20 21a8 8 0 0 0-16 0" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-plus" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/><line x1="5" y1="12" x2="19" y2="12" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="ico-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="m9 12 2 2 4-4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-key" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="m21 2-9.6 9.6" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="m15.5 7.5 3 3L22 7l-3-3" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-fingerprint" viewBox="0 0 24 24"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M2 16h.01" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M21.8 16c.2-2 .131-5.354 0-6" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M8.65 22c.21-.66.45-1.32.57-2" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M17 19c.14-.52.28-1.05.35-1.57" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M18.8 4A10 10 0 0 0 2.2 12c0 1.5.2 3.5.8 5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-qr" viewBox="0 0 24 24"><rect width="5" height="5" x="3" y="3" rx="1" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><rect width="5" height="5" x="16" y="3" rx="1" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><rect width="5" height="5" x="3" y="16" rx="1" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M21 16h-3a2 2 0 0 0-2 2v3" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M21 21v.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/><path d="M12 7v3a2 2 0 0 1-2 2H7" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M3 12h.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/><path d="M12 3h.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/><path d="M12 16v.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/><path d="M16 12h1" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M21 12v.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/><path d="M12 21v-1" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/></symbol>
-  <symbol id="ico-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><line x1="21" y1="21" x2="16.65" y2="16.65" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-  <symbol id="ico-sms" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-audio" viewBox="0 0 24 24"><path d="M2 10v4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M6 6v12" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M10 3v18" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M14 8v8" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M18 5v14" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M22 10v4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/></symbol>
-  <symbol id="ico-mixnet" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="18" cy="5" r="3" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-bluetooth" viewBox="0 0 24 24"><path d="m7 7 10 10-5 5V2l5 5L7 17" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-wifi" viewBox="0 0 24 24"><path d="M12 20h.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/><path d="M2 8.82a15 15 0 0 1 20 0" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M5 12.86a10 10 0 0 1 14 0" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M8.5 16.43a5 5 0 0 1 7 0" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-sos" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><line x1="12" y1="9" x2="12" y2="13" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="ico-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="12" cy="12" r="3" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1.5" stroke="url(#holo-sheen)" stroke-width="1" fill="currentColor"/><circle cx="12" cy="5" r="1.5" stroke="url(#holo-sheen)" stroke-width="1" fill="currentColor"/><circle cx="12" cy="19" r="1.5" stroke="url(#holo-sheen)" stroke-width="1" fill="currentColor"/></symbol>
-  <symbol id="ico-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-check-double" viewBox="0 0 24 24"><path d="M18 6 7 17l-5-5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="m22 10-7.5 7.5L13 16" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><polyline points="12 6 12 12 16 14" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-warning" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><line x1="12" y1="9" x2="12" y2="13" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><line x1="12" y1="17" x2="12.01" y2="17" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="ico-error" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="m15 9-6 6" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="m9 9 6 6" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/></symbol>
-  <symbol id="ico-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M12 16v-4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M12 8h.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="ico-back" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M19 12H5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-close" viewBox="0 0 24 24"><path d="M18 6 6 18" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="m6 6 12 12" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/></symbol>
-  <symbol id="ico-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M7 11V7a5 5 0 0 1 10 0v4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-refresh" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M21 3v5h-5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M8 16H3v5" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-trash" viewBox="0 0 24 24"><path d="M3 6h18" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><line x1="10" y1="11" x2="10" y2="17" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><line x1="14" y1="11" x2="14" y2="17" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/></symbol>
-  <symbol id="ico-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
-  <symbol id="ico-signal" viewBox="0 0 24 24"><path d="M2 20h.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/><path d="M7 20v-4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M12 20v-8" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M17 20V8" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/><path d="M22 20V4" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/></symbol>
-  <symbol id="ico-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M12 17h.01" stroke="url(#holo-sheen)" stroke-width="2" stroke-linecap="round"/></symbol>
-  <symbol id="ico-send" viewBox="0 0 24 24"><path d="m3 3 3 9-3 9 19-9Z" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M6 12h16" stroke="url(#holo-sheen)" stroke-width="1.75" stroke-linecap="round"/></symbol>
+  <symbol id="i-message-square" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></symbol>
+  <symbol id="i-user-round" viewBox="0 0 24 24"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></symbol>
+  <symbol id="i-message-square-plus" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6"/><path d="M9 10h6"/></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-key-round" viewBox="0 0 24 24"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></symbol>
+  <symbol id="i-fingerprint" viewBox="0 0 24 24"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></symbol>
+  <symbol id="i-qr-code" viewBox="0 0 24 24"><rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-message-square-text" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M13 8H7"/><path d="M17 12H7"/></symbol>
+  <symbol id="i-audio-waveform" viewBox="0 0 24 24"><path d="M2 13a2 2 0 0 0 2-2V7a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0V4a2 2 0 0 1 4 0v13a2 2 0 0 0 4 0v-4a2 2 0 0 1 2-2"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></symbol>
+  <symbol id="i-bluetooth" viewBox="0 0 24 24"><path d="m7 7 10 10-5 5V2l5 5L7 17"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M12 20h.01"/><path d="M2 8.82a15 15 0 0 1 20 0"/><path d="M5 12.86a10 10 0 0 1 14 0"/><path d="M8.5 16.43a5 5 0 0 1 7 0"/></symbol>
+  <symbol id="i-signal" viewBox="0 0 24 24"><path d="M2 20h.01"/><path d="M7 20v-4"/><path d="M12 20v-8"/><path d="M17 20V8"/><path d="M22 20V4"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-siren" viewBox="0 0 24 24"><path d="M7 18v-6a5 5 0 1 1 10 0v6"/><path d="M5 21a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2z"/><path d="M21 12h1"/><path d="M18.5 4.5 18 5"/><path d="M2 12h1"/><path d="M12 2v1"/><path d="m4.929 4.929.707.707"/><path d="M12 12v6"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-ellipsis-vertical" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-check-check" viewBox="0 0 24 24"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-triangle-alert" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></symbol>
+  <symbol id="i-circle-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-circle-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-refresh-cw" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></symbol>
+  <symbol id="i-trash-2" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/></symbol>
+  <symbol id="i-send-horizontal" viewBox="0 0 24 24"><path d="m3 3 3 9-3 9 19-9Z"/><path d="M6 12h16"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
 </svg>
 
 <header>
   <div class="header-brand">
     <span class="app-title">
-      <svg class="ico" aria-hidden="true" style="color:var(--holo-cyan)"><use href="#ico-shield"/></svg>
-      xChat
+      <svg class="header-logo" viewBox="0 0 108 108" aria-hidden="true">
+        <defs>
+          <linearGradient id="header-logo-ga" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#7dd3fc"/>
+            <stop offset="1" stop-color="#5eead0"/>
+          </linearGradient>
+        </defs>
+        <g fill="none" stroke="url(#header-logo-ga)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M54,16 L84,32 L84,68 L54,88 L24,68 L24,32 Z"/>
+          <path d="M40,40 L68,68 M68,40 L40,68" stroke-width="2.5"/>
+          <circle cx="54" cy="54" r="5"/>
+        </g>
+        <g fill="url(#header-logo-ga)">
+          <circle cx="40" cy="40" r="3.4"/>
+          <circle cx="68" cy="40" r="3.4"/>
+          <circle cx="40" cy="68" r="3.4"/>
+          <circle cx="68" cy="68" r="3.4"/>
+        </g>
+      </svg>
+      <span class="app-wordmark">xChat</span>
     </span>
     <button class="status-chip" id="meshStatusLabel" onclick="switchTab('carrier')" aria-label="Connection status">
       <span class="pulse-dot"></span>
@@ -1791,23 +1930,23 @@ details.expander[open] {
   </div>
   <div class="header-actions">
     <button class="sos-header-btn" onclick="openSosGuard()" aria-label="Emergency SOS" title="Emergency SOS">
-      <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-sos"/></svg>
+      <svg class="ico ico-sm ico--coral" aria-hidden="true"><use href="#i-siren"/></svg>
     </button>
     <button class="action-circle-btn" onclick="openModal('helpSheet')" aria-label="Help" title="Help">
-      <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-help"/></svg>
+      <svg class="ico ico-sm" aria-hidden="true"><use href="#i-circle-help"/></svg>
     </button>
     <button class="action-circle-btn" onclick="toggleDropdown('topMenuDropdown')" aria-label="More options" title="More">
-      <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-more"/></svg>
+      <svg class="ico ico-sm" aria-hidden="true"><use href="#i-ellipsis-vertical"/></svg>
     </button>
     <div class="dropdown-menu" id="topMenuDropdown" role="menu">
       <button class="dropdown-item" role="menuitem" onclick="closeDropdown(); openModal('helpSheet');">
-        <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-help"/></svg> Help &amp; Manual
+        <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-circle-help"/></svg> Help &amp; Manual
       </button>
       <button class="dropdown-item" role="menuitem" onclick="closeDropdown(); openModal('aboutSheet');">
-        <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-info"/></svg> About xChat
+        <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-info"/></svg> About xChat
       </button>
       <button class="dropdown-item" role="menuitem" onclick="closeDropdown(); switchTab('me');">
-        <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-settings"/></svg> Identity &amp; Profile
+        <svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-settings"/></svg> Identity &amp; Profile
       </button>
     </div>
   </div>
@@ -1825,7 +1964,7 @@ details.expander[open] {
           <div class="address-value font-mono" id="myReachableSocket">Loading…</div>
         </div>
         <button class="btn-action btn-ghost btn-sm" onclick="copyMySocket()" aria-label="Copy my address">
-          <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-copy"/></svg> Copy
+          <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy
         </button>
       </div>
 
@@ -1845,7 +1984,7 @@ details.expander[open] {
       
       <div class="search-wrap">
         <div class="search-box">
-          <svg class="ico ico-sm" aria-hidden="true" style="color:var(--text-3)"><use href="#ico-search"/></svg>
+          <svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-search"/></svg>
           <input type="text" class="search-input" id="searchFilter" placeholder="Search contacts (Ctrl+K)…" oninput="filterContacts()" aria-label="Search contacts">
         </div>
       </div>
@@ -1865,7 +2004,7 @@ details.expander[open] {
       <div class="transport-scroll">
         <!-- Wi-Fi / Local Network -->
         <div class="transport-row">
-          <svg class="ico" style="color:var(--holo-mint)" aria-hidden="true"><use href="#ico-wifi"/></svg>
+          <svg class="ico ico--mint" aria-hidden="true"><use href="#i-wifi"/></svg>
           <div class="transport-info">
             <span class="transport-name">Wi-Fi / Local network</span>
             <span class="transport-detail">Direct P2P over TCP socket</span>
@@ -1876,12 +2015,12 @@ details.expander[open] {
         <!-- Anonymous Routing (Mixnet) -->
         <details class="transport-row expander">
           <summary>
-            <svg class="ico" style="color:var(--holo-cyan)" aria-hidden="true"><use href="#ico-mixnet"/></svg>
+            <svg class="ico ico--violet" aria-hidden="true"><use href="#i-route"/></svg>
             <div class="transport-info">
               <span class="transport-name">Anonymous routing (Mixnet)</span>
               <span class="transport-detail">Chaumian Sphinx onion routing</span>
             </div>
-            <span class="badge badge-working">Active</span>
+            <span class="badge badge-simulated">Experimental</span>
           </summary>
           <div class="expander-content">
             <div class="transport-detail-text">Wraps messages in Sphinx onion encryption with timing jitter and cover traffic to defeat traffic analysis.</div>
@@ -1895,18 +2034,18 @@ details.expander[open] {
 
         <!-- Bluetooth Mesh -->
         <div class="transport-row">
-          <svg class="ico" style="color:var(--holo-mint)" aria-hidden="true"><use href="#ico-bluetooth"/></svg>
+          <svg class="ico ico--violet" aria-hidden="true"><use href="#i-bluetooth"/></svg>
           <div class="transport-info">
             <span class="transport-name">Bluetooth radio mesh</span>
             <span class="transport-detail">CoreBluetooth / Android BLE mesh transport</span>
           </div>
-          <span class="badge badge-working">Active</span>
+          <span class="badge badge-simulated">Experimental</span>
         </div>
 
         <!-- SMS Carrier -->
         <details class="transport-row expander">
           <summary>
-            <svg class="ico" style="color:var(--holo-amber)" aria-hidden="true"><use href="#ico-sms"/></svg>
+            <svg class="ico ico--violet" aria-hidden="true"><use href="#i-message-square-text"/></svg>
             <div class="transport-info">
               <span class="transport-name">SMS carrier</span>
               <span class="transport-detail">140-char cellular text frames</span>
@@ -1923,7 +2062,7 @@ details.expander[open] {
         <!-- Audio Modem -->
         <details class="transport-row expander">
           <summary>
-            <svg class="ico" style="color:var(--holo-violet)" aria-hidden="true"><use href="#ico-audio"/></svg>
+            <svg class="ico ico--violet" aria-hidden="true"><use href="#i-audio-waveform"/></svg>
             <div class="transport-info">
               <span class="transport-name">Audio modem</span>
               <span class="transport-detail">Bell 202 AFSK acoustic tones</span>
@@ -1939,7 +2078,7 @@ details.expander[open] {
         <!-- Air-Gap Identity -->
         <details class="transport-row expander">
           <summary>
-            <svg class="ico" style="color:var(--holo-mint)" aria-hidden="true"><use href="#ico-qr"/></svg>
+            <svg class="ico ico--cyan" aria-hidden="true"><use href="#i-qr-code"/></svg>
             <div class="transport-info">
               <span class="transport-name">Air-gap key exchange</span>
               <span class="transport-detail">Offline public key bundle</span>
@@ -1950,7 +2089,7 @@ details.expander[open] {
             <div class="transport-detail-text">Public cryptographic identity for offline out-of-band peer verification.</div>
             <div id="qrPayloadDisplaySide" class="code-block font-mono">Loading…</div>
             <button class="btn-action btn-ghost btn-sm" onclick="copyIdentityPayload()">
-              <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-copy"/></svg> Copy public identity
+              <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy public identity
             </button>
           </div>
         </details>
@@ -1969,7 +2108,7 @@ details.expander[open] {
         <label class="form-label" for="burnerPassInput">Shared passphrase</label>
         <input type="password" class="form-input" id="burnerPassInput" placeholder="e.g. whisper-delta-99" aria-label="Shared passphrase">
         <button class="btn-action btn-primary" onclick="enterBurnerRoom()" style="margin-top:var(--space-2)">
-          <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-flame"/></svg> Join room
+          <svg class="ico ico-sm ico--amber" aria-hidden="true"><use href="#i-flame"/></svg> Join room
         </button>
       </div>
     </div>
@@ -1995,21 +2134,21 @@ details.expander[open] {
           <span class="identity-label">Address</span>
           <span class="identity-value font-mono" id="meAddress">—</span>
           <button class="btn-icon" onclick="copyMySocket()" aria-label="Copy address" title="Copy address">
-            <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-copy"/></svg>
+            <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy"/></svg>
           </button>
         </div>
         <div class="identity-row">
           <span class="identity-label">Fingerprint</span>
           <span class="identity-value font-mono" id="meFingerprint">—</span>
           <button class="btn-icon" onclick="copyFingerprint()" aria-label="Copy fingerprint" title="Copy fingerprint">
-            <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-copy"/></svg>
+            <svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy"/></svg>
           </button>
         </div>
       </div>
 
       <details class="expander" style="margin-bottom:var(--space-4)">
         <summary style="background:var(--bg-raised); border:1px solid var(--border-hairline); border-radius:var(--radius-md);">
-          <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-info"/></svg>
+          <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-info"/></svg>
           <span>Cryptographic details</span>
         </summary>
         <div class="expander-content">
@@ -2019,35 +2158,35 @@ details.expander[open] {
 
       <div style="display:flex; gap:var(--space-2);">
         <button class="btn-action btn-primary" onclick="openModal('qrModal')" style="flex:1;">
-          <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-qr"/></svg> Share badge
+          <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code"/></svg> Share badge
         </button>
         <button class="btn-action btn-secondary" onclick="openScannerFromQr()" style="flex:1;">
-          📷 Scan badge
+          <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code"/></svg> Scan badge
         </button>
       </div>
     </div>
 
     <!-- FAB: New Chat -->
     <button class="fab-new-chat" onclick="openModal('addPeerModal')" aria-label="New chat" title="New chat">
-      <svg class="ico" aria-hidden="true"><use href="#ico-plus"/></svg>
+      <svg class="ico ico--cyan" aria-hidden="true"><use href="#i-message-square-plus"/></svg>
     </button>
 
     <!-- Bottom Navigation Dock -->
     <nav class="bottom-nav-dock" aria-label="Main navigation">
       <button class="nav-tab active" id="navItemChats" onclick="switchTab('chats')" aria-label="Chats" aria-current="page">
-        <span class="glass-tile"><svg class="ico" aria-hidden="true"><use href="#ico-chat"/></svg></span>
+        <span class="ico-tile"><svg class="ico ico--cyan" aria-hidden="true"><use href="#i-message-square"/></svg></span>
         <span class="nav-label">Chats</span>
       </button>
       <button class="nav-tab" id="navItemCarrier" onclick="switchTab('carrier')" aria-label="Network">
-        <span class="glass-tile"><svg class="ico" aria-hidden="true"><use href="#ico-network"/></svg></span>
+        <span class="ico-tile"><svg class="ico ico--cyan" aria-hidden="true"><use href="#i-globe"/></svg></span>
         <span class="nav-label">Network</span>
       </button>
       <button class="nav-tab" id="navItemBurner" onclick="switchTab('rooms')" aria-label="Rooms">
-        <span class="glass-tile"><svg class="ico" aria-hidden="true"><use href="#ico-flame"/></svg></span>
+        <span class="ico-tile"><svg class="ico ico--amber" aria-hidden="true"><use href="#i-flame"/></svg></span>
         <span class="nav-label">Rooms</span>
       </button>
       <button class="nav-tab" id="navItemProfile" onclick="switchTab('me')" aria-label="Me">
-        <span class="glass-tile"><svg class="ico" aria-hidden="true"><use href="#ico-user"/></svg></span>
+        <span class="ico-tile"><svg class="ico ico--cyan" aria-hidden="true"><use href="#i-user-round"/></svg></span>
         <span class="nav-label">Me</span>
       </button>
     </nav>
@@ -2059,12 +2198,12 @@ details.expander[open] {
     <div class="empty-state" id="emptyChatState">
       <div class="empty-state-card">
         <div class="empty-state-icon">
-          <svg class="ico ico-lg" aria-hidden="true" style="color:var(--holo-cyan)"><use href="#ico-shield"/></svg>
+          <svg class="ico ico-lg ico--cyan" aria-hidden="true"><use href="#i-shield-check"/></svg>
         </div>
         <h2 class="empty-state-title">End-to-End Encrypted</h2>
         <p class="empty-state-desc">Peer-to-peer messaging designed for network blackouts and local communication. No central servers, no telemetry, no tracking.</p>
         <button class="btn-action btn-primary" onclick="openModal('addPeerModal')">
-          <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-plus"/></svg> Start new chat
+          <svg class="ico ico-sm" aria-hidden="true"><use href="#i-message-square-plus"/></svg> Start new chat
         </button>
         <div class="empty-state-hint">
           <strong>Quick start (3 steps):</strong>
@@ -2079,7 +2218,7 @@ details.expander[open] {
     <div class="chat-active-view" id="activeChatView">
       <div class="chat-header">
         <button class="back-btn-mobile" onclick="closeChatMobile()" aria-label="Back to contacts">
-          <svg class="ico" aria-hidden="true"><use href="#ico-back"/></svg>
+          <svg class="ico" aria-hidden="true"><use href="#i-arrow-left"/></svg>
         </button>
         <div class="active-peer-avatar-box" id="activePeerAvatar">?</div>
         <div class="chat-peer-info-box">
@@ -2088,19 +2227,19 @@ details.expander[open] {
         </div>
         <div class="chat-header-actions">
           <button class="action-circle-btn" onclick="openSafetyVerificationModal()" aria-label="Verify Safety Code" title="Verify Safety Code">
-            <svg class="ico ico-sm" aria-hidden="true" style="color:var(--holo-mint)"><use href="#ico-shield"/></svg>
+            <svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-shield-check"/></svg>
           </button>
           <button class="action-circle-btn" onclick="pingActivePeer()" aria-label="Check peer latency" title="Check latency">
-            <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-signal"/></svg>
+            <svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-signal"/></svg>
           </button>
           <button class="action-circle-btn" onclick="openModal('peerInfoModal')" aria-label="Peer details" title="Peer details">
-            <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-info"/></svg>
+            <svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-info"/></svg>
           </button>
         </div>
       </div>
       
       <div class="security-strip">
-        <svg class="ico ico-sm" aria-hidden="true" style="color:var(--holo-mint)"><use href="#ico-lock"/></svg>
+        <svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-lock"/></svg>
         <span>Double Ratchet + ChaCha20-Poly1305 · Forward Secret</span>
       </div>
 
@@ -2124,7 +2263,7 @@ details.expander[open] {
         </button>
         <input type="text" class="input-box" id="msgInput" placeholder="Write an encrypted message…" onkeydown="if(event.key==='Enter') sendCurrentMessage()" aria-label="Type message">
         <button class="btn-send" onclick="sendCurrentMessage()" aria-label="Send message">
-          <svg class="ico" aria-hidden="true"><use href="#ico-send"/></svg>
+          <svg class="ico ico--cyan" aria-hidden="true"><use href="#i-send-horizontal"/></svg>
         </button>
       </div>
     </div>
@@ -2136,14 +2275,14 @@ details.expander[open] {
 <!-- Modal: Add Peer (Smart Connect) -->
 <div class="modal-overlay" id="addPeerModal" role="dialog" aria-modal="true" aria-label="New chat">
   <div class="modal-card">
-    <button class="modal-close-x" onclick="closeModal('addPeerModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeModal('addPeerModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title">New chat</h2>
     <p class="modal-desc">Connect directly using a @username, nickname, invite link, or local IP:Port.</p>
     
     <div style="margin-bottom: var(--space-3);">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
         <label class="form-label" style="margin:0;">Peer Identifier or Username</label>
-        <span style="font-size:11px; color:var(--holo-cyan); cursor:pointer;" onclick="closeModal('addPeerModal'); openScannerFromQr();">📷 Scan QR</span>
+        <span style="font-size:11px; color:var(--holo-cyan); cursor:pointer;" onclick="closeModal('addPeerModal'); openScannerFromQr();"><svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code"/></svg> Scan QR</span>
       </div>
       <input type="text" class="form-input font-mono" id="smartPeerInput" placeholder="@username, Alice, or 192.168.1.15:9400" oninput="onSmartPeerInputChanged(this.value)" onkeydown="if(event.key==='Enter') confirmSmartConnect()">
       <div id="smartResolutionFeedback" class="form-hint" style="color:var(--text-3)">Enter a peer @username, address, or paste an invite link.</div>
@@ -2153,7 +2292,7 @@ details.expander[open] {
     <input type="text" class="form-input" id="newAliasInput" placeholder="e.g. Alice, HQ Station" aria-label="Contact name" onkeydown="if(event.key==='Enter') confirmSmartConnect()">
 
     <details class="expander" style="margin: var(--space-3) 0;">
-      <summary style="font-size:11.5px; color:var(--text-2); cursor:pointer; font-weight:600;">⚙️ Advanced Connection Overrides</summary>
+      <summary style="font-size:11.5px; color:var(--text-2); cursor:pointer; font-weight:600;"><svg class="ico ico-sm ico--muted" aria-hidden="true"><use href="#i-settings"/></svg> Advanced Connection Overrides</summary>
       <div class="expander-content">
         <label class="form-label">Resolved Socket Target</label>
         <input type="text" class="form-input font-mono" id="newTargetInput" placeholder="Auto-resolved or 192.168.1.15:9400" oninput="validatePeerAddress()">
@@ -2173,7 +2312,7 @@ details.expander[open] {
 <!-- Modal: Share Identity / QR -->
 <div class="modal-overlay" id="qrModal" role="dialog" aria-modal="true" aria-label="Share identity">
   <div class="modal-card" style="text-align:center; max-width:380px;">
-    <button class="modal-close-x" onclick="closeModal('qrModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeModal('qrModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title" style="justify-content:center">Identity &amp; QR Badge</h2>
     <p class="modal-desc">Present your cryptographic badge for zero-config air-gap pairing.</p>
     
@@ -2196,8 +2335,8 @@ details.expander[open] {
     <div id="qrPayloadDisplay" class="code-block font-mono" style="display:none">Loading…</div>
 
     <div class="modal-actions" style="justify-content:center; gap:8px;">
-      <button class="btn-action btn-primary btn-sm" onclick="copyIdentityPayload()"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-copy"/></svg> Copy Details</button>
-      <button class="btn-action btn-secondary btn-sm" onclick="openScannerFromQr()">📷 Scan Badge</button>
+      <button class="btn-action btn-primary btn-sm" onclick="copyIdentityPayload()"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-copy"/></svg> Copy Details</button>
+      <button class="btn-action btn-secondary btn-sm" onclick="openScannerFromQr()"><svg class="ico ico-sm ico--cyan" aria-hidden="true"><use href="#i-qr-code"/></svg> Scan Badge</button>
       <button class="btn-action btn-cancel btn-sm" onclick="closeModal('qrModal')">Close</button>
     </div>
   </div>
@@ -2206,7 +2345,7 @@ details.expander[open] {
 <!-- Modal: Camera Video QR Code Scanner -->
 <div class="modal-overlay" id="qrScannerModal" role="dialog" aria-modal="true" aria-label="Scan QR Code">
   <div class="modal-card" style="text-align:center; max-width:360px;">
-    <button class="modal-close-x" onclick="closeQrScanner()" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeQrScanner()" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title" style="justify-content:center">Scan Peer Badge</h2>
     <p class="modal-desc">Align a peer's xChat QR badge within the viewfinder.</p>
 
@@ -2226,7 +2365,7 @@ details.expander[open] {
     <input type="file" id="qrFileInput" accept="image/*" style="display:none;" onchange="handleQrImageUpload(event)" />
 
     <div class="modal-actions" style="justify-content:center; gap:8px;">
-      <button class="btn-action btn-ghost" onclick="document.getElementById('qrFileInput').click()">📁 Upload Image</button>
+      <button class="btn-action btn-ghost" onclick="document.getElementById('qrFileInput').click()"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-qr-code"/></svg> Upload Image</button>
       <button class="btn-action btn-cancel" onclick="closeQrScanner()">Cancel</button>
     </div>
   </div>
@@ -2235,8 +2374,8 @@ details.expander[open] {
 <!-- Modal: Visual Safety Verification (Heuristic 6) -->
 <div class="modal-overlay" id="safetyVerificationModal" role="dialog" aria-modal="true" aria-label="Safety Code Verification">
   <div class="modal-card" style="text-align:center; max-width:380px;">
-    <button class="modal-close-x" onclick="closeModal('safetyVerificationModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
-    <h2 class="modal-title" style="justify-content:center"><svg class="ico ico-sm" aria-hidden="true" style="color:var(--holo-mint)"><use href="#ico-shield"/></svg> Safety Code Verification</h2>
+    <button class="modal-close-x" onclick="closeModal('safetyVerificationModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+    <h2 class="modal-title" style="justify-content:center"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-shield-check"/></svg> Safety Code Verification</h2>
     <p class="modal-desc">Compare these 6 emoji symbols with <strong id="safetyPeerName" style="color:var(--text-1);">Peer</strong> out-of-band to mathematically verify encryption integrity.</p>
 
     <div style="background:var(--bg-input); border:1px solid var(--border-hairline); border-radius:var(--radius-lg); padding:18px 12px; margin:16px 0; box-shadow:0 8px 30px rgba(0,0,0,0.5);">
@@ -2254,7 +2393,7 @@ details.expander[open] {
     </div>
 
     <div class="modal-actions" style="justify-content:center; gap:8px;">
-      <button class="btn-action btn-primary" onclick="markPeerAsVerified()">Mark as Verified ✓</button>
+      <button class="btn-action btn-primary" onclick="markPeerAsVerified()"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-check-check"/></svg> Mark as Verified</button>
       <button class="btn-action btn-cancel" onclick="closeModal('safetyVerificationModal')">Close</button>
     </div>
   </div>
@@ -2263,7 +2402,7 @@ details.expander[open] {
 <!-- Modal: Profile & Identity Customizer -->
 <div class="modal-overlay" id="profileModal" role="dialog" aria-modal="true" aria-label="Profile and Identity">
   <div class="modal-card" style="max-width:400px;">
-    <button class="modal-close-x" onclick="closeModal('profileModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeModal('profileModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title">Mesh Identity &amp; Profile</h2>
     <p class="modal-desc">Configure your anonymous presence broadcasted over local radio.</p>
 
@@ -2273,7 +2412,7 @@ details.expander[open] {
       <div style="flex:1;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
           <span style="font-size:11px; color:var(--text-3); text-transform:uppercase;">Avatar Accent</span>
-          <button type="button" onclick="createNewIdentity()" class="btn-action btn-ghost btn-sm" style="font-size:10px; padding:2px 6px;">✨ Fresh Keys</button>
+          <button type="button" onclick="createNewIdentity()" class="btn-action btn-ghost btn-sm" style="font-size:10px; padding:2px 6px;"><svg class="ico ico-sm ico--mint" aria-hidden="true"><use href="#i-key-round"/></svg> Fresh Keys</button>
         </div>
         <div style="display:flex; gap:8px;">
           <div class="swatch-btn" onclick="selectAvatarColor(0)" style="width:22px; height:22px; border-radius:6px; background:linear-gradient(135deg, #d4c4fb, #b8a0f8); cursor:pointer;"></div>
@@ -2304,22 +2443,22 @@ details.expander[open] {
 <!-- Modal: Carrier Transport Selector -->
 <div class="modal-overlay" id="carrierTransportModal" role="dialog" aria-modal="true" aria-label="Select transport">
   <div class="modal-card">
-    <button class="modal-close-x" onclick="closeModal('carrierTransportModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeModal('carrierTransportModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title">Select transport</h2>
     <p class="modal-desc">Configure carrier and routing for outbound messages.</p>
     <div class="transport-select-list">
       <button class="transport-select-item" onclick="closeModal('carrierTransportModal'); showToast('Anonymous mixnet routing enabled');">
-        <svg class="ico" style="color:var(--holo-cyan)" aria-hidden="true"><use href="#ico-mixnet"/></svg>
+        <svg class="ico ico--violet" aria-hidden="true"><use href="#i-route"/></svg>
         <div><strong>Anonymous routing</strong><br><span class="text-2">Mixnet with 3 hops &amp; jitter</span></div>
-        <span class="badge badge-working">Active</span>
+        <span class="badge badge-simulated">Experimental</span>
       </button>
       <button class="transport-select-item" onclick="closeModal('carrierTransportModal'); switchTab('carrier');">
-        <svg class="ico" style="color:var(--holo-amber)" aria-hidden="true"><use href="#ico-sms"/></svg>
+        <svg class="ico ico--violet" aria-hidden="true"><use href="#i-message-square-text"/></svg>
         <div><strong>SMS carrier</strong><br><span class="text-2">140-char frames (no internet)</span></div>
         <span class="badge badge-simulated">Simulated</span>
       </button>
       <button class="transport-select-item" onclick="closeModal('carrierTransportModal'); switchTab('carrier');">
-        <svg class="ico" style="color:var(--holo-violet)" aria-hidden="true"><use href="#ico-audio"/></svg>
+        <svg class="ico ico--violet" aria-hidden="true"><use href="#i-audio-waveform"/></svg>
         <div><strong>Audio modem</strong><br><span class="text-2">AFSK acoustic tones over radio</span></div>
         <span class="badge badge-simulated">Simulated</span>
       </button>
@@ -2333,8 +2472,8 @@ details.expander[open] {
 <!-- Modal: Burner Room -->
 <div class="modal-overlay" id="burnerModal" role="dialog" aria-modal="true" aria-label="Disappearing room">
   <div class="modal-card">
-    <button class="modal-close-x" onclick="closeModal('burnerModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
-    <h2 class="modal-title"><svg class="ico ico-sm" aria-hidden="true" style="color:var(--holo-coral)"><use href="#ico-flame"/></svg> Disappearing room</h2>
+    <button class="modal-close-x" onclick="closeModal('burnerModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
+    <h2 class="modal-title"><svg class="ico ico-sm ico--amber" aria-hidden="true"><use href="#i-flame"/></svg> Disappearing room</h2>
     <p class="modal-desc">Messages live in volatile memory only and are never saved to disk.</p>
     <label class="form-label" for="burnerRoomInputModal">Room name</label>
     <input type="text" class="form-input" id="burnerRoomInputModal" placeholder="e.g. ghost-room-7">
@@ -2350,12 +2489,12 @@ details.expander[open] {
 <!-- Modal: Peer Info -->
 <div class="modal-overlay" id="peerInfoModal" role="dialog" aria-modal="true" aria-label="Peer details">
   <div class="modal-card">
-    <button class="modal-close-x" onclick="closeModal('peerInfoModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeModal('peerInfoModal')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title" id="peerInfoTitle">Peer details</h2>
     <div id="peerInfoBody" class="code-block font-mono" style="max-height:160px; margin:var(--space-3) 0">…</div>
     <div class="modal-actions">
       <button class="btn-action btn-danger" onclick="deleteActivePeer()">
-        <svg class="ico ico-sm" aria-hidden="true"><use href="#ico-trash"/></svg> Remove peer
+        <svg class="ico ico-sm ico--coral" aria-hidden="true"><use href="#i-trash-2"/></svg> Remove peer
       </button>
       <button class="btn-action btn-cancel" onclick="closeModal('peerInfoModal')">Close</button>
     </div>
@@ -2365,7 +2504,7 @@ details.expander[open] {
 <!-- Sheet: Help & Documentation (Heuristic 10) -->
 <div class="modal-overlay" id="helpSheet" role="dialog" aria-modal="true" aria-label="Help and glossary">
   <div class="modal-card">
-    <button class="modal-close-x" onclick="closeModal('helpSheet')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeModal('helpSheet')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title">Help &amp; Glossary</h2>
     <p class="modal-desc">Quick guide and reference for xChat offline messaging.</p>
     <div class="help-glossary">
@@ -2408,7 +2547,7 @@ details.expander[open] {
 <!-- Sheet: About xChat -->
 <div class="modal-overlay" id="aboutSheet" role="dialog" aria-modal="true" aria-label="About xChat">
   <div class="modal-card">
-    <button class="modal-close-x" onclick="closeModal('aboutSheet')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#ico-close"/></svg></button>
+    <button class="modal-close-x" onclick="closeModal('aboutSheet')" aria-label="Close dialog"><svg class="ico ico-sm" aria-hidden="true"><use href="#i-x"/></svg></button>
     <h2 class="modal-title">About xChat</h2>
     <p class="modal-desc">Offline-first, serverless encrypted messenger built in Rust.</p>
     <div style="font-size:var(--text-xs); color:var(--text-2); line-height:1.6; display:flex; flex-direction:column; gap:var(--space-2)">
@@ -2426,7 +2565,7 @@ details.expander[open] {
 <div class="sos-guard-overlay" id="sosGuardOverlay" role="alertdialog" aria-modal="true" aria-label="Emergency SOS confirmation" style="display:none">
   <div class="sos-guard-content">
     <div class="sos-ring" id="sosRing">
-      <svg class="ico" aria-hidden="true" style="color:var(--holo-coral);width:48px;height:48px"><use href="#ico-sos"/></svg>
+      <svg class="ico ico--coral" aria-hidden="true" style="width:48px;height:48px"><use href="#i-siren"/></svg>
     </div>
     <h2 class="sos-guard-title">Emergency SOS</h2>
     <p class="sos-guard-desc">Hold the button for 2 seconds to broadcast an encrypted emergency distress beacon to all reachable peers on the local network.</p>
@@ -3200,7 +3339,7 @@ function renderMessages() {
             const bubble = document.createElement('div');
             bubble.className = 'msg-bubble ' + (m.sender === 'self' ? 'out' : 'in');
             const statusIcon = m.sender === 'self' ?
-                '<svg class="ico ico-sm msg-status" aria-hidden="true"><use href="#ico-check-double"/></svg>' : '';
+                '<svg class="ico ico-sm ico--mint msg-status" aria-hidden="true"><use href="#i-check-check"/></svg>' : '';
             bubble.innerHTML =
                 escapeHtml(m.text) +
                 '<div class="msg-meta-row">' +
