@@ -895,7 +895,13 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                     });
                                     let out_body =
                                         serde_json::to_string(&wire_envelope).unwrap_or_default();
-                                    if target.starts_with("ble:") {
+                                    let mut delivered = false;
+                                    if !target.starts_with("ble:") && target.contains(':') && !target.starts_with('@') {
+                                        if dispatch_http_post(&target, "/api/receive", &out_body).await.is_ok() {
+                                            delivered = true;
+                                        }
+                                    }
+                                    if !delivered {
                                         let ble_t = {
                                             let st = state_clone.lock().unwrap();
                                             st.ble_transport.clone()
@@ -910,10 +916,6 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                                 target
                                             );
                                         }
-                                    } else {
-                                        let _ =
-                                            dispatch_http_post(&target, "/api/receive", &out_body)
-                                                .await;
                                     }
                                 }
                             } else {
@@ -932,7 +934,13 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                 });
                                 let out_body =
                                     serde_json::to_string(&wire_envelope).unwrap_or_default();
-                                if target.starts_with("ble:") {
+                                let mut delivered = false;
+                                if !target.starts_with("ble:") && target.contains(':') && !target.starts_with('@') {
+                                    if dispatch_http_post(&target, "/api/receive", &out_body).await.is_ok() {
+                                        delivered = true;
+                                    }
+                                }
+                                if !delivered {
                                     let ble_t = {
                                         let st = state_clone.lock().unwrap();
                                         st.ble_transport.clone()
@@ -947,9 +955,6 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                             target
                                         );
                                     }
-                                } else {
-                                    let _ = dispatch_http_post(&target, "/api/receive", &out_body)
-                                        .await;
                                 }
                             }
                         }

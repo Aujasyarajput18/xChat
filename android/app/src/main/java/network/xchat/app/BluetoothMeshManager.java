@@ -239,7 +239,7 @@ public class BluetoothMeshManager {
                             gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null);
                         }
                     } else {
-                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, offset, null);
+                        gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, new byte[0]);
                     }
                 }
 
@@ -330,6 +330,47 @@ public class BluetoothMeshManager {
                         connectedCentrals.put(device.getAddress(), device);
                         Log.i(TAG, "Central " + device.getAddress() + " CCCD updated (notifications enabled).");
                     }
+                }
+
+                @Override
+                public void onDescriptorReadRequest(BluetoothDevice device, int requestId, int offset, BluetoothGattDescriptor descriptor) {
+                    super.onDescriptorReadRequest(device, requestId, offset, descriptor);
+                    byte[] val = (descriptor != null && descriptor.getValue() != null)
+                        ? descriptor.getValue()
+                        : BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE;
+                    if (gattServer != null) {
+                        try {
+                            if (offset >= val.length) {
+                                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, new byte[0]);
+                            } else {
+                                byte[] slice = new byte[val.length - offset];
+                                System.arraycopy(val, offset, slice, 0, slice.length);
+                                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, slice);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                @Override
+                public void onExecuteWrite(BluetoothDevice device, int requestId, boolean execute) {
+                    super.onExecuteWrite(device, requestId, execute);
+                    if (gattServer != null) {
+                        try {
+                            gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null);
+                        } catch (Exception ignored) {}
+                    }
+                }
+
+                @Override
+                public void onNotificationSent(BluetoothDevice device, int status) {
+                    super.onNotificationSent(device, status);
+                    Log.d(TAG, "GattServer onNotificationSent: device=" + (device != null ? device.getAddress() : "unknown") + " status=" + status);
+                }
+
+                @Override
+                public void onMtuChanged(BluetoothDevice device, int mtu) {
+                    super.onMtuChanged(device, mtu);
+                    Log.d(TAG, "GattServer onMtuChanged: device=" + (device != null ? device.getAddress() : "unknown") + " mtu=" + mtu);
                 }
             });
 

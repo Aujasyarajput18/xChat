@@ -505,7 +505,24 @@ impl BleCentralTransport {
 
         {
             let mut lock = self.connected_peers.lock().await;
-            lock.insert(peer_id.clone(), connected_peer);
+            lock.insert(peer_id.clone(), connected_peer.clone());
+            lock.insert(format!("ble:{}", peer_id), connected_peer.clone());
+
+            if let Ok(disc_lock) = self.discovered_devices.lock() {
+                if let Some(dev) = disc_lock.get(&peer_id) {
+                    if let Some(ref u) = dev.username {
+                        lock.insert(u.clone(), connected_peer.clone());
+                        lock.insert(u.to_lowercase(), connected_peer.clone());
+                        let stripped = u.strip_prefix('@').unwrap_or(u);
+                        lock.insert(stripped.to_string(), connected_peer.clone());
+                        lock.insert(stripped.to_lowercase(), connected_peer.clone());
+                    }
+                    if !dev.name.is_empty() {
+                        lock.insert(dev.name.clone(), connected_peer.clone());
+                        lock.insert(dev.name.to_lowercase(), connected_peer.clone());
+                    }
+                }
+            }
         }
 
         // Send local identity handshake frame immediately!
@@ -536,31 +553,85 @@ impl BleCentralTransport {
     pub async fn send_raw_bytes(&self, target_id: &str, data: &[u8]) -> Result<(), TransportError> {
         let clean_id = target_id.strip_prefix("ble:").unwrap_or(target_id);
 
-        let mut peer_opt = {
-            let peers = self.connected_peers.lock().await;
-            peers
-                .get(clean_id)
-                .cloned()
-                .or_else(|| {
-                    // Grab any active connected peer
-                    peers.values().next().cloned()
-                })
+        let candidate_dev_ids: Vec<String> = {
+            if let Ok(disc) = self.discovered_devices.lock() {
+                disc.iter()
+                    .filter_map(|(dev_id, dev)| {
+                        let matches_uname = dev.username.as_ref().is_some_and(|u| {
+                            u.eq_ignore_ascii_case(clean_id)
+                                || u.strip_prefix('@').unwrap_or(u).eq_ignore_ascii_case(clean_id)
+                        });
+                        let matches_name = dev.name.eq_ignore_ascii_case(clean_id);
+                        if matches_uname || matches_name {
+                            Some(dev_id.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            }
         };
+
+        let mut peer_opt: Option<ConnectedPeer> = None;
+        {
+            let peers = self.connected_peers.lock().await;
+            // 1. Try exact match
+            if let Some(p) = peers.get(clean_id) {
+                if p.peripheral.is_connected().await.unwrap_or(false) {
+                    peer_opt = Some(p.clone());
+                }
+            }
+            // 2. Try alias variant (@alias or stripped)
+            if peer_opt.is_none() {
+                let alt_id = if clean_id.starts_with('@') {
+                    clean_id.strip_prefix('@').unwrap_or(clean_id).to_string()
+                } else {
+                    format!("@{}", clean_id)
+                };
+                if let Some(p) = peers.get(&alt_id).or_else(|| peers.get(&clean_id.to_lowercase())) {
+                    if p.peripheral.is_connected().await.unwrap_or(false) {
+                        peer_opt = Some(p.clone());
+                    }
+                }
+            }
+            // 3. Match against discovered_devices map
+            if peer_opt.is_none() {
+                for dev_id in &candidate_dev_ids {
+                    if let Some(p) = peers.get(dev_id) {
+                        if p.peripheral.is_connected().await.unwrap_or(false) {
+                            peer_opt = Some(p.clone());
+                            break;
+                        }
+                    }
+                }
+            }
+            // 4. Fallback: ANY peer in connected_peers with is_connected() == true
+            if peer_opt.is_none() {
+                for p in peers.values() {
+                    if p.peripheral.is_connected().await.unwrap_or(false) {
+                        peer_opt = Some(p.clone());
+                        break;
+                    }
+                }
+            }
+            // 5. Final fallback: the first entry in connected_peers
+            if peer_opt.is_none() {
+                peer_opt = peers.values().next().cloned();
+            }
+        }
 
         if let Some(ref p) = peer_opt {
             if !p.peripheral.is_connected().await.unwrap_or(false) {
                 if let Ok(Ok(_)) =
-                    tokio::time::timeout(Duration::from_secs(4), p.peripheral.connect()).await
+                    tokio::time::timeout(Duration::from_secs(3), p.peripheral.connect()).await
                 {
                     let _ = tokio::time::timeout(
-                        Duration::from_secs(4),
+                        Duration::from_secs(3),
                         p.peripheral.discover_services(),
                     )
                     .await;
-                } else {
-                    let mut peers = self.connected_peers.lock().await;
-                    peers.retain(|_, v| v.peripheral.id() != p.peripheral.id());
-                    peer_opt = None;
                 }
             }
         }
@@ -602,6 +673,7 @@ impl BleCentralTransport {
                                         };
                                         let mut peers = self.connected_peers.lock().await;
                                         peers.insert(pid.clone(), connected.clone());
+                                        peers.insert(format!("ble:{}", pid), connected.clone());
                                         peers.insert(clean_id.to_string(), connected.clone());
                                         peer_opt = Some(connected);
                                         break;
@@ -626,7 +698,7 @@ impl BleCentralTransport {
 
         for chunk in &chunks {
             let mut write_ok = false;
-            for attempt in 0..3 {
+            for _attempt in 0..3 {
                 let res = peer
                     .peripheral
                     .write(&peer.rx_char, chunk, WriteType::WithoutResponse)
@@ -645,14 +717,8 @@ impl BleCentralTransport {
                     break;
                 }
 
-                warn!(
-                    "BLE write attempt {} failed ({:?}). Refreshing services...",
-                    attempt + 1,
-                    res2.err()
-                );
-
                 if !peer.peripheral.is_connected().await.unwrap_or(false) {
-                    let _ = tokio::time::timeout(Duration::from_secs(4), peer.peripheral.connect()).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(3), peer.peripheral.connect()).await;
                 }
 
                 if let Ok(Ok(_)) = tokio::time::timeout(

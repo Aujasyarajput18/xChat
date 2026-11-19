@@ -7,6 +7,7 @@ use crate::errors::TransportError;
 
 pub const BLE_FRAME_MAGIC: [u8; 2] = [0x58, 0x43]; // 'X', 'C'
 pub const BLE_HEADER_LEN: usize = 10;
+pub const ATT_HEADER_LEN: usize = 3;
 pub const DEFAULT_BLE_MTU: usize = 512;
 pub const MIN_BLE_MTU: usize = 23;
 pub const MAX_INCOMPLETE_AGE_SECS: u64 = 60;
@@ -71,7 +72,10 @@ pub struct BleChunker;
 impl BleChunker {
     pub fn chunk_payload(payload: &[u8], mtu: usize, msg_id: u16) -> Vec<Vec<u8>> {
         let effective_mtu = mtu.max(MIN_BLE_MTU);
-        let max_chunk_payload = effective_mtu.saturating_sub(BLE_HEADER_LEN).max(1);
+        let max_chunk_payload = effective_mtu
+            .saturating_sub(ATT_HEADER_LEN)
+            .saturating_sub(BLE_HEADER_LEN)
+            .max(1);
 
         if payload.is_empty() {
             let header = BleFrameHeader::new(msg_id, 0, 1, 0);
