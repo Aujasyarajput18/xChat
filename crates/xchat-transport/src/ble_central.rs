@@ -34,11 +34,13 @@ pub const BLE_INFO_CHAR_UUID: Uuid = uuid::uuid!("a495ff13-c5b1-4b44-b512-1370f0
 pub struct DiscoveredBleDevice {
     pub id: String,
     pub name: String,
+    pub username: Option<String>,
     pub rssi: i16,
     pub address: String,
     pub last_seen: u64,
 }
 
+#[derive(Clone)]
 struct ConnectedPeer {
     peripheral: Peripheral,
     rx_char: Characteristic,
@@ -58,6 +60,7 @@ pub struct BleCentralTransport {
     inbound_json_tx: mpsc::Sender<String>,
     inbound_json_rx: Arc<TokioMutex<mpsc::Receiver<String>>>,
     msg_id_counter: Arc<AtomicU16>,
+    local_identity: Arc<Mutex<Option<serde_json::Value>>>,
 }
 
 impl BleCentralTransport {
@@ -68,6 +71,7 @@ impl BleCentralTransport {
         let discovered_devices = Arc::new(Mutex::new(HashMap::new()));
         let connected_peers = Arc::new(TokioMutex::new(HashMap::new()));
         let msg_id_counter = Arc::new(AtomicU16::new(1));
+        let local_identity = Arc::new(Mutex::new(None));
 
         let adapter = match Manager::new().await {
             Ok(manager) => match manager.adapters().await {
@@ -100,6 +104,7 @@ impl BleCentralTransport {
             inbound_json_tx,
             inbound_json_rx: Arc::new(TokioMutex::new(inbound_json_rx)),
             msg_id_counter,
+            local_identity,
         });
 
         if transport.is_available() {
@@ -107,6 +112,17 @@ impl BleCentralTransport {
         }
 
         transport
+    }
+
+    pub fn set_local_identity(&self, username: &str, display_name: &str, address: &str) {
+        if let Ok(mut lock) = self.local_identity.lock() {
+            *lock = Some(serde_json::json!({
+                "type": "handshake",
+                "username": username,
+                "display_name": display_name,
+                "address": address,
+            }));
+        }
     }
 
     pub fn subscribe_inbound_json(&self) -> Arc<TokioMutex<mpsc::Receiver<String>>> {
@@ -132,7 +148,7 @@ impl BleCentralTransport {
             debug!("BLE physical hardware background scanner active.");
 
             loop {
-                tokio::time::sleep(Duration::from_millis(3000)).await;
+                tokio::time::sleep(Duration::from_millis(2500)).await;
                 if !self.is_available() {
                     break;
                 }
@@ -141,6 +157,8 @@ impl BleCentralTransport {
                     continue;
                 };
 
+                let mut matching_peripherals = Vec::new();
+
                 for peripheral in peripherals {
                     let id_str = peripheral.id().to_string();
                     let Ok(Some(props)) = peripheral.properties().await else {
@@ -148,40 +166,50 @@ impl BleCentralTransport {
                     };
 
                     let is_xchat = props.services.iter().any(|s| *s == BLE_SERVICE_UUID);
-                    if !is_xchat {
+                    let name = props.local_name.clone().unwrap_or_default();
+                    if !is_xchat && !name.contains("Nothing") && !name.contains("Phone") && !name.contains("xChat") {
                         continue;
                     }
 
-                    let name = props
-                        .local_name
-                        .clone()
-                        .unwrap_or_else(|| format!("xChat-{}", &id_str[..6.min(id_str.len())]));
                     let rssi = props.rssi.unwrap_or(-70);
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs();
 
-                    let device = DiscoveredBleDevice {
-                        id: id_str.clone(),
-                        name: name.clone(),
-                        rssi,
-                        address: format!("ble:{}", id_str),
-                        last_seen: now,
-                    };
-
-                    if let Ok(mut lock) = self.discovered_devices.lock() {
-                        lock.insert(id_str.clone(), device);
+                    {
+                        if let Ok(mut lock) = self.discovered_devices.lock() {
+                            let existing_uname = lock.get(&id_str).and_then(|d| d.username.clone());
+                            let device = DiscoveredBleDevice {
+                                id: id_str.clone(),
+                                name: if name.is_empty() { format!("xChat-{}", &id_str[..6.min(id_str.len())]) } else { name.clone() },
+                                username: existing_uname,
+                                rssi,
+                                address: format!("ble:{}", id_str),
+                                last_seen: now,
+                            };
+                            lock.insert(id_str.clone(), device);
+                        }
                     }
 
-                    // Attempt connection and characteristic discovery if not already connected
+                    matching_peripherals.push((peripheral, id_str, rssi));
+                }
+
+                matching_peripherals.sort_by(|a, b| b.2.cmp(&a.2));
+
+                if let Some((freshest_p, freshest_id, _)) = matching_peripherals.first() {
                     let already_connected = {
                         let lock = self.connected_peers.lock().await;
-                        lock.contains_key(&id_str)
+                        lock.contains_key(freshest_id)
                     };
 
                     if !already_connected {
-                        self.clone().connect_peer(peripheral, id_str).await;
+                        let transport_clone = self.clone();
+                        let p = freshest_p.clone();
+                        let id = freshest_id.clone();
+                        tokio::spawn(async move {
+                            transport_clone.connect_peer(p, id).await;
+                        });
                     }
                 }
             }
@@ -189,15 +217,29 @@ impl BleCentralTransport {
     }
 
     async fn connect_peer(self: Arc<Self>, peripheral: Peripheral, peer_id: String) {
-        if let Err(e) = peripheral.connect().await {
-            debug!("Unable to connect to BLE peer {}: {}", peer_id, e);
-            return;
+        let connect_res = tokio::time::timeout(Duration::from_secs(4), peripheral.connect()).await;
+        match connect_res {
+            Ok(Ok(_)) => {
+                debug!("Connected to BLE peripheral: {}", peer_id);
+            }
+            Ok(Err(e)) => {
+                debug!("Unable to connect to BLE peer {}: {}", peer_id, e);
+                return;
+            }
+            Err(_) => {
+                debug!("Connection to BLE peer {} timed out", peer_id);
+                return;
+            }
         }
 
-        if let Err(e) = peripheral.discover_services().await {
-            warn!("Failed to discover services for BLE peer {}: {}", peer_id, e);
-            let _ = peripheral.disconnect().await;
-            return;
+        let disc_res = tokio::time::timeout(Duration::from_secs(4), peripheral.discover_services()).await;
+        match disc_res {
+            Ok(Ok(_)) => {}
+            _ => {
+                warn!("Failed to discover services for BLE peer: {}", peer_id);
+                let _ = peripheral.disconnect().await;
+                return;
+            }
         }
 
         let chars = peripheral.characteristics();
@@ -214,11 +256,11 @@ impl BleCentralTransport {
             if let Err(e) = peripheral.subscribe(tx).await {
                 warn!("Failed to subscribe to TX notifications on {}: {}", peer_id, e);
             } else {
-                // Spawn notification listener for incoming envelopes
                 let p_clone = peripheral.clone();
                 let inbound_tx = self.inbound_tx.clone();
                 let inbound_json_tx = self.inbound_json_tx.clone();
                 let peer_id_clone = peer_id.clone();
+                let discovered_devices = self.discovered_devices.clone();
 
                 tokio::spawn(async move {
                     if let Ok(mut stream) = p_clone.notifications().await {
@@ -232,6 +274,27 @@ impl BleCentralTransport {
                                         assembled_bytes.len()
                                     );
                                     if let Ok(json_str) = String::from_utf8(assembled_bytes.clone()) {
+                                        // Update discovered_devices with actual peer username
+                                        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                                            let uname_opt = json_val["username"]
+                                                .as_str()
+                                                .or_else(|| json_val["sender_alias"].as_str())
+                                                .or_else(|| json_val["alias"].as_str());
+                                            if let Some(uname) = uname_opt {
+                                                if let Ok(mut lock) = discovered_devices.lock() {
+                                                    if let Some(dev) = lock.get_mut(&peer_id_clone) {
+                                                        dev.username = Some(if uname.starts_with('@') {
+                                                            uname.to_string()
+                                                        } else {
+                                                            format!("@{}", uname)
+                                                        });
+                                                        if let Some(dname) = json_val["display_name"].as_str() {
+                                                            dev.name = dname.to_string();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                         let _ = inbound_json_tx.send(json_str).await;
                                     }
                                     if let Ok(env) = bincode::deserialize::<EncryptedEnvelope>(&assembled_bytes) {
@@ -251,24 +314,86 @@ impl BleCentralTransport {
             }
         }
 
-        info!("Successfully connected to physical BLE peer: {}", peer_id);
-        let mut lock = self.connected_peers.lock().await;
-        lock.insert(peer_id, ConnectedPeer {
-            peripheral,
-            rx_char,
+        let connected_peer = ConnectedPeer {
+            peripheral: peripheral.clone(),
+            rx_char: rx_char.clone(),
             tx_char,
-        });
+        };
+
+        {
+            let mut lock = self.connected_peers.lock().await;
+            lock.insert(peer_id.clone(), connected_peer);
+        }
+
+        // Send local identity handshake frame immediately!
+        let identity_opt = {
+            let lock = self.local_identity.lock().ok();
+            lock.and_then(|l| l.clone())
+        };
+
+        if let Some(id_json) = identity_opt {
+            if let Ok(id_bytes) = serde_json::to_vec(&id_json) {
+                let msg_id = self.msg_id_counter.fetch_add(1, Ordering::Relaxed);
+                let chunks = BleChunker::chunk_payload(&id_bytes, 180, msg_id);
+                for chunk in chunks {
+                    let _ = peripheral.write(&rx_char, &chunk, WriteType::WithoutResponse).await;
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                }
+            }
+        }
+
+        info!("Successfully connected and handshaked with physical BLE peer: {}", peer_id);
     }
 
     pub async fn send_raw_bytes(&self, target_id: &str, data: &[u8]) -> Result<(), TransportError> {
         let clean_id = target_id.strip_prefix("ble:").unwrap_or(target_id);
-        let peers = self.connected_peers.lock().await;
 
-        let peer = if let Some(p) = peers.get(clean_id) {
-            p
-        } else if let Some((_, p)) = peers.iter().next() {
-            p
-        } else {
+        let mut peer_opt = {
+            let peers = self.connected_peers.lock().await;
+            peers.get(clean_id).cloned().or_else(|| peers.values().next().cloned())
+        };
+
+        if let Some(ref p) = peer_opt {
+            if !p.peripheral.is_connected().await.unwrap_or(false) {
+                let mut peers = self.connected_peers.lock().await;
+                peers.remove(clean_id);
+                peer_opt = None;
+            }
+        }
+
+        if peer_opt.is_none() {
+            if let Some(ref adapter) = self.adapter {
+                if let Ok(peripherals) = adapter.peripherals().await {
+                    for p in peripherals {
+                        let pid = p.id().to_string();
+                        let is_match = pid == clean_id || p.properties().await.ok().flatten().map_or(false, |props| {
+                            props.services.iter().any(|s| *s == BLE_SERVICE_UUID)
+                        });
+                        if is_match {
+                            if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(4), p.connect()).await {
+                                if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_secs(4), p.discover_services()).await {
+                                    let chars = p.characteristics();
+                                    if let Some(rx) = chars.iter().find(|c| c.uuid == BLE_RX_CHAR_UUID).cloned() {
+                                        let tx = chars.iter().find(|c| c.uuid == BLE_TX_CHAR_UUID).cloned();
+                                        let connected = ConnectedPeer {
+                                            peripheral: p.clone(),
+                                            rx_char: rx,
+                                            tx_char: tx,
+                                        };
+                                        let mut peers = self.connected_peers.lock().await;
+                                        peers.insert(pid, connected.clone());
+                                        peer_opt = Some(connected);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let Some(peer) = peer_opt else {
             return Err(TransportError::NoRouteToHost(format!(
                 "No connected BLE peer found for '{}'",
                 target_id
@@ -276,7 +401,7 @@ impl BleCentralTransport {
         };
 
         let msg_id = self.msg_id_counter.fetch_add(1, Ordering::Relaxed);
-        let chunks = BleChunker::chunk_payload(data, DEFAULT_BLE_MTU, msg_id);
+        let chunks = BleChunker::chunk_payload(data, 180, msg_id);
 
         for chunk in chunks {
             let res = peer
@@ -289,6 +414,7 @@ impl BleCentralTransport {
                     .await
                     .map_err(|e| TransportError::Serialization(format!("BLE write error: {}", e)))?;
             }
+            tokio::time::sleep(Duration::from_millis(15)).await;
         }
 
         Ok(())
