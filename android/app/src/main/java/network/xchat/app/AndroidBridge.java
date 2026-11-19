@@ -610,6 +610,22 @@ public class AndroidBridge {
                         }
                     });
                 } catch (Exception e) {
+                    // If HTTP delivery failed (e.g. offline with Wi-Fi disabled), check if BLE mesh is active
+                    if (bleManager != null && bleManager.isSupported() && bleManager.hasConnectedCentrals()) {
+                        bleManager.sendEnvelope(targetHostPort, jsonPayload, new BluetoothMeshManager.BleSendCallback() {
+                            @Override
+                            public void onResult(final boolean success, final String error) {
+                                activity.runOnUiThread(new Runnable() {
+                                    @Override
+                                    public void run() {
+                                        String js = "if(window.onSendCallback) window.onSendCallback(" + JSONObject.quote(callbackId) + ", " + success + ");";
+                                        activity.getWebView().evaluateJavascript(js, null);
+                                    }
+                                });
+                            }
+                        });
+                        return;
+                    }
                     activity.runOnUiThread(new Runnable() {
                         @Override
                         public void run() {

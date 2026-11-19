@@ -174,6 +174,10 @@ public class BluetoothMeshManager {
         return isScanning;
     }
 
+    public boolean hasConnectedCentrals() {
+        return !connectedCentrals.isEmpty();
+    }
+
     public List<DiscoveredBleNode> getDiscoveredNodes() {
         long now = System.currentTimeMillis();
         List<DiscoveredBleNode> active = new ArrayList<>();
@@ -288,6 +292,15 @@ public class BluetoothMeshManager {
                                     node.lastSeen = System.currentTimeMillis();
                                     node.rssi = -45;
                                     discoveredNodes.put(device.getAddress(), node);
+
+                                    // Index connectedCentrals under device address, username, and mesh address
+                                    connectedCentrals.put(device.getAddress(), device);
+                                    connectedCentrals.put(node.username, device);
+                                    connectedCentrals.put(node.username.toLowerCase(), device);
+                                    if (!saddr.isEmpty()) {
+                                        connectedCentrals.put(saddr, device);
+                                    }
+
                                     bridge.onBlePeerDiscovered(node);
                                 }
 
@@ -305,13 +318,17 @@ public class BluetoothMeshManager {
                 public void onDescriptorWriteRequest(BluetoothDevice device, int requestId, BluetoothGattDescriptor descriptor,
                                                     boolean preparedWrite, boolean responseNeeded, int offset, byte[] value) {
                     super.onDescriptorWriteRequest(device, requestId, descriptor, preparedWrite, responseNeeded, offset, value);
-                    if (responseNeeded) {
+                    if (descriptor != null && value != null) {
+                        descriptor.setValue(value);
+                    }
+                    if (responseNeeded && gattServer != null) {
                         try {
                             gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value);
                         } catch (Exception ignored) {}
                     }
                     if (device != null && device.getAddress() != null) {
                         connectedCentrals.put(device.getAddress(), device);
+                        Log.i(TAG, "Central " + device.getAddress() + " CCCD updated (notifications enabled).");
                     }
                 }
             });
@@ -545,6 +562,12 @@ public class BluetoothMeshManager {
 
         // 1. Check if target is an already-connected Central (e.g. Mac)!
         BluetoothDevice connectedCentral = connectedCentrals.get(cleanMac);
+        if (connectedCentral == null) {
+            connectedCentral = connectedCentrals.get(cleanMac.toLowerCase());
+        }
+        if (connectedCentral == null && !cleanMac.startsWith("@")) {
+            connectedCentral = connectedCentrals.get("@" + cleanMac.toLowerCase());
+        }
         if (connectedCentral == null && !connectedCentrals.isEmpty()) {
             // If there's an active central connected, use it!
             connectedCentral = connectedCentrals.values().iterator().next();
@@ -562,9 +585,35 @@ public class BluetoothMeshManager {
                         List<byte[]> chunks = chunkPayload(payloadBytes, 20, msgId);
                         boolean ok = true;
                         for (byte[] chunk : chunks) {
-                            txChar.setValue(chunk);
-                            if (!gattServer.notifyCharacteristicChanged(targetDevice, txChar, false)) {
-                                Log.w(TAG, "notifyCharacteristicChanged returned false for target " + targetDevice.getAddress());
+                            boolean sent = false;
+                            for (int retry = 0; retry < 4; retry++) {
+                                try {
+                                    txChar.setValue(chunk);
+                                    if (Build.VERSION.SDK_INT >= 33) {
+                                        try {
+                                            int res = gattServer.notifyCharacteristicChanged(targetDevice, txChar, false, chunk);
+                                            if (res == 0) { // BluetoothStatusCodes.SUCCESS
+                                                sent = true;
+                                            }
+                                        } catch (Throwable t) {
+                                            // Fallback to legacy
+                                        }
+                                    }
+                                    if (!sent) {
+                                        try {
+                                            sent = gattServer.notifyCharacteristicChanged(targetDevice, txChar, false);
+                                        } catch (Throwable ignored) {}
+                                    }
+                                    if (sent) {
+                                        break;
+                                    }
+                                } catch (Throwable t) {
+                                    Log.w(TAG, "Notification attempt " + retry + " failed: " + t.getMessage());
+                                }
+                                try { Thread.sleep(20); } catch (Exception ignored) {}
+                            }
+                            if (!sent) {
+                                Log.w(TAG, "notifyCharacteristicChanged failed after retries for " + targetDevice.getAddress());
                                 ok = false;
                                 break;
                             }

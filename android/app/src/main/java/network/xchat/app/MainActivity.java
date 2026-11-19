@@ -2,14 +2,17 @@ package network.xchat.app;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -21,6 +24,8 @@ public class MainActivity extends Activity {
     private WebView webView;
     private AndroidBridge bridge;
     private static final int PERMISSION_REQ_CODE = 1001;
+    private static final int FILE_CHOOSER_REQ_CODE = 2001;
+    private ValueCallback<Uri[]> fileUploadCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -80,6 +85,34 @@ public class MainActivity extends Activity {
             @Override
             public void onPermissionRequest(final android.webkit.PermissionRequest request) {
                 request.grant(request.getResources());
+            }
+
+            @Override
+            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (fileUploadCallback != null) {
+                    fileUploadCallback.onReceiveValue(null);
+                    fileUploadCallback = null;
+                }
+                fileUploadCallback = filePathCallback;
+                try {
+                    Intent intent = fileChooserParams.createIntent();
+                    startActivityForResult(intent, FILE_CHOOSER_REQ_CODE);
+                    return true;
+                } catch (Exception e) {
+                    try {
+                        Intent fallback = new Intent(Intent.ACTION_GET_CONTENT);
+                        fallback.addCategory(Intent.CATEGORY_OPENABLE);
+                        fallback.setType("image/*");
+                        startActivityForResult(Intent.createChooser(fallback, "Scan QR Code Image"), FILE_CHOOSER_REQ_CODE);
+                        return true;
+                    } catch (Exception ex) {
+                        if (fileUploadCallback != null) {
+                            fileUploadCallback.onReceiveValue(null);
+                            fileUploadCallback = null;
+                        }
+                        return false;
+                    }
+                }
             }
 
             @Override
@@ -190,6 +223,29 @@ public class MainActivity extends Activity {
             bridge.cleanup();
         }
         super.onDestroy();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == FILE_CHOOSER_REQ_CODE) {
+            if (fileUploadCallback != null) {
+                Uri[] results = null;
+                if (resultCode == Activity.RESULT_OK && data != null) {
+                    if (data.getData() != null) {
+                        results = new Uri[]{data.getData()};
+                    } else if (data.getClipData() != null) {
+                        int count = data.getClipData().getItemCount();
+                        results = new Uri[count];
+                        for (int i = 0; i < count; i++) {
+                            results[i] = data.getClipData().getItemAt(i).getUri();
+                        }
+                    }
+                }
+                fileUploadCallback.onReceiveValue(results);
+                fileUploadCallback = null;
+            }
+        }
     }
 
     @Override
