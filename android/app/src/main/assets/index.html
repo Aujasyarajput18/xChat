@@ -3405,20 +3405,36 @@ async function init() {
         setInterval(pollServerMessages, 1500);
         updateStatusChip();
         setInterval(updateStatusChip, 10000);
-        setInterval(() => renderNearbyRadar(fetchDiscoveredPeers()), 4000);
     }
+    fetchDiscoveredPeers().then(peers => renderNearbyRadar(peers));
+    setInterval(async () => {
+        const peers = await fetchDiscoveredPeers();
+        renderNearbyRadar(peers);
+    }, 4000);
 }
 
 // Nearby Radar
-function fetchDiscoveredPeers() {
+async function fetchDiscoveredPeers() {
     let peers = [];
     if (isNative && window.AndroidBridge && window.AndroidBridge.getDiscoveredPeers) {
         try {
             peers = JSON.parse(window.AndroidBridge.getDiscoveredPeers() || '[]');
         } catch(e) {}
+    } else {
+        try {
+            const res = await fetch(API_BASE + '/api/discovered');
+            if (res.ok) {
+                peers = await res.json();
+            }
+        } catch(e) {}
     }
     return peers;
 }
+
+window.onNearbyPeersUpdated = async function() {
+    const peers = await fetchDiscoveredPeers();
+    renderNearbyRadar(peers);
+};
 
 function renderNearbyRadar(peers) {
     peers = peers || [];
@@ -3456,20 +3472,27 @@ function renderNearbyRadar(peers) {
 
 function connectToDiscoveredPeer(peer) {
     const u = peer.username || '@peer';
-    const sock = peer.ip ? `${peer.ip}:${peer.port || 8080}` : (peer.address || '127.0.0.1:8080');
+    const isBle = peer.transport === 'ble' || (peer.address && peer.address.startsWith('ble:')) || (peer.ip && peer.ip.startsWith('ble:'));
+    const sock = isBle ? (peer.address || peer.ip) : (peer.ip ? `${peer.ip}:${peer.port || 8080}` : (peer.address || '127.0.0.1:8080'));
+    const statusLabel = isBle ? 'Physical BLE Mesh' : 'Nearby Wi-Fi Mesh';
+
     let contact = contacts.find(c => c.alias === u || c.target === sock);
     if (!contact) {
         contact = {
             alias: u,
             target: sock,
             fingerprint: peer.fingerprint || '',
-            status: 'LAN',
-            last_message: 'Connected nearby',
-            last_time: ''
+            address: peer.address || '',
+            status: statusLabel,
+            last_message: `Connected via ${statusLabel}`,
+            last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         };
         contacts.push(contact);
-        Storage.set('contacts', JSON.stringify(contacts));
+    } else {
+        contact.target = sock;
+        contact.status = statusLabel;
     }
+    Storage.set('contacts', JSON.stringify(contacts));
     renderContacts();
     selectContact(contact);
     showToast(STRINGS.toastConnectedTo(u));
@@ -3714,8 +3737,23 @@ async function sendCurrentMessage() {
         time_str: timeStr
     });
 
-    if (isNative && window.AndroidBridge.sendHttpEnvelope) {
-        window.AndroidBridge.sendHttpEnvelope(activeContact.target, payload, 'send_' + Date.now());
+    if (isNative) {
+        const isBleTarget = !activeContact.target || 
+                            activeContact.target.startsWith('ble:') || 
+                            activeContact.target === 'Physical BLE Mesh' || 
+                            activeContact.target === 'ble:mesh' ||
+                            (activeContact.status && activeContact.status.toLowerCase().includes('ble')) ||
+                            !activeContact.target.includes(':') ||
+                            activeContact.target === '127.0.0.1:8080';
+
+        if (isBleTarget && window.AndroidBridge && window.AndroidBridge.sendBleEnvelope) {
+            const targetMac = (activeContact.target || '').replace('ble:', '');
+            window.AndroidBridge.sendBleEnvelope(targetMac, payload, 'send_' + Date.now());
+        } else if (activeContact.target && activeContact.target !== 'local' && window.AndroidBridge && window.AndroidBridge.sendHttpEnvelope) {
+            window.AndroidBridge.sendHttpEnvelope(activeContact.target, payload, 'send_' + Date.now());
+        } else if (window.AndroidBridge && window.AndroidBridge.sendBleEnvelope) {
+            window.AndroidBridge.sendBleEnvelope('', payload, 'send_' + Date.now());
+        }
     } else {
         try {
             await fetch(API_BASE + '/api/send', {
@@ -3749,15 +3787,32 @@ window.onIncomingNetworkMessage = function(rawJson) {
                 (senderAddr && c.address === senderAddr) ||
                 (c.target && c.target.startsWith('ble:'))
             );
-            if (contact) {
+            if (!contact) {
+                contact = {
+                    alias: formattedAlias,
+                    target: (senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'ble:mesh',
+                    address: senderAddr,
+                    status: 'Physical BLE Mesh',
+                    last_message: 'Connected via Physical BLE Mesh',
+                    last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                };
+                contacts.push(contact);
+            } else {
+                const prevAlias = contact.alias;
                 contact.alias = formattedAlias;
                 if (senderAddr) contact.address = senderAddr;
                 contact.status = 'Physical BLE Mesh';
-                renderContacts();
-                if (activeContact && (activeContact.target === contact.target || activeContact.alias === contact.alias)) {
-                    activeContact.alias = formattedAlias;
-                    renderMessages();
+                if (prevAlias !== formattedAlias && chatHistories[prevAlias]) {
+                    chatHistories[formattedAlias] = (chatHistories[formattedAlias] || []).concat(chatHistories[prevAlias]);
+                    delete chatHistories[prevAlias];
+                    Storage.set('chat_histories', JSON.stringify(chatHistories));
                 }
+            }
+            Storage.set('contacts', JSON.stringify(contacts));
+            renderContacts();
+            if (activeContact && (activeContact.target === contact.target || activeContact.alias === contact.alias || activeContact.alias === formattedAlias)) {
+                activeContact = contact;
+                renderMessages();
             }
             return;
         }
@@ -3780,7 +3835,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
         if (!contact) {
             contact = {
                 alias: formattedAlias,
-                target: (senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'Physical BLE Mesh',
+                target: (senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'ble:mesh',
                 address: senderAddr,
                 status: 'Physical BLE Mesh',
                 last_message: text,
@@ -3788,11 +3843,16 @@ window.onIncomingNetworkMessage = function(rawJson) {
             };
             contacts.push(contact);
         } else {
+            const prevAlias = contact.alias;
             contact.alias = formattedAlias;
             if (senderAddr) contact.address = senderAddr;
             contact.last_message = text;
             contact.last_time = timeStr;
             contact.status = 'Physical BLE Mesh';
+            if (prevAlias !== formattedAlias && chatHistories[prevAlias]) {
+                chatHistories[formattedAlias] = (chatHistories[formattedAlias] || []).concat(chatHistories[prevAlias]);
+                delete chatHistories[prevAlias];
+            }
         }
 
         if (!chatHistories[contact.alias]) {
@@ -4092,6 +4152,9 @@ function renderDesignerQr(canvas, text) {
 }
 
 // QR Scanner
+let scanCanvas = null;
+let scanCtx = null;
+
 function openScannerFromQr() {
     closeModal('qrModal');
     openModal('qrScannerModal');
@@ -4110,7 +4173,36 @@ async function startQrScanner() {
             });
             if (video) {
                 video.srcObject = qrScannerStream;
-                video.play();
+                await video.play();
+
+                if (!scanCanvas) {
+                    scanCanvas = document.createElement('canvas');
+                    scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true });
+                }
+
+                if (qrScannerInterval) {
+                    clearInterval(qrScannerInterval);
+                }
+
+                qrScannerInterval = setInterval(() => {
+                    try {
+                        if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+                            scanCanvas.width = video.videoWidth;
+                            scanCanvas.height = video.videoHeight;
+                            scanCtx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+                            const imgData = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+
+                            if (typeof jsQR !== 'undefined') {
+                                const code = jsQR(imgData.data, imgData.width, imgData.height, {
+                                    inversionAttempts: "attemptBoth"
+                                });
+                                if (code && code.data && code.data.trim().length > 0) {
+                                    onQrCodeDetected(code.data.trim());
+                                }
+                            }
+                        }
+                    } catch(e) {}
+                }, 200);
             }
             if (status) status.innerText = 'Align QR badge within frame…';
         }
@@ -4120,10 +4212,16 @@ async function startQrScanner() {
 }
 
 function closeQrScanner() {
+    if (qrScannerInterval) {
+        clearInterval(qrScannerInterval);
+        qrScannerInterval = null;
+    }
     if (qrScannerStream) {
         qrScannerStream.getTracks().forEach(t => t.stop());
         qrScannerStream = null;
     }
+    const video = document.getElementById('qrScannerVideo');
+    if (video) video.srcObject = null;
     closeModal('qrScannerModal');
 }
 
