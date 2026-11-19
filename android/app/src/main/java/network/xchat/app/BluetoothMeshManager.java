@@ -639,7 +639,33 @@ public class BluetoothMeshManager {
             @Override
             public void run() {
                 try {
-                    final BluetoothDevice targetDevice = bluetoothAdapter.getRemoteDevice(cleanMac);
+                    String macToConnect = cleanMac;
+                    if (!BluetoothAdapter.checkBluetoothAddress(macToConnect)) {
+                        String resolvedMac = null;
+                        for (DiscoveredBleNode n : discoveredNodes.values()) {
+                            if (n.macAddress != null && BluetoothAdapter.checkBluetoothAddress(n.macAddress)) {
+                                if (macToConnect.equalsIgnoreCase(n.username) || macToConnect.equalsIgnoreCase(n.meshAddress) || macToConnect.equalsIgnoreCase(n.deviceName)) {
+                                    resolvedMac = n.macAddress;
+                                    break;
+                                }
+                            }
+                        }
+                        if (resolvedMac == null) {
+                            for (DiscoveredBleNode n : discoveredNodes.values()) {
+                                if (n.macAddress != null && BluetoothAdapter.checkBluetoothAddress(n.macAddress)) {
+                                    resolvedMac = n.macAddress;
+                                    break;
+                                }
+                            }
+                        }
+                        if (resolvedMac == null) {
+                            if (callback != null) callback.onResult(false, "Remote BLE device address not found: " + cleanMac);
+                            return;
+                        }
+                        macToConnect = resolvedMac;
+                    }
+
+                    final BluetoothDevice targetDevice = bluetoothAdapter.getRemoteDevice(macToConnect);
                     if (targetDevice == null) {
                         if (callback != null) callback.onResult(false, "Remote BLE device not found: " + cleanMac);
                         return;

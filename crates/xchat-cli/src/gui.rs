@@ -797,17 +797,28 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         let hist = st.messages.entry(req.alias.clone()).or_default();
                         hist.push(msg.clone());
 
+                        let mut resolved_target = req.target.clone();
                         if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == req.alias) {
                             c.last_message = req.text.clone();
                             c.last_time = now_str.clone();
+                            if (resolved_target.is_none()
+                                || resolved_target.as_deref() == Some("")
+                                || resolved_target.as_deref() == Some("local"))
+                                && !c.target.is_empty()
+                                && c.target != "local"
+                            {
+                                resolved_target = Some(c.target.clone());
+                            }
                         }
                         let (s, d) = st.keystore.identity.to_bytes();
                         let cur_addr = st.keystore.identity.public_key().address();
-                        (req.target, st.profile.username.clone(), cur_addr, s, d)
+                        (resolved_target, st.profile.username.clone(), cur_addr, s, d)
                     };
 
                     // Handle Local Assistant / Echo Bot
-                    if req.alias == "xChat Assistant" || target_opt.as_deref() == Some("local") {
+                    if req.alias == "xChat Assistant"
+                        || (target_opt.as_deref() == Some("local") && req.alias == "Saved Messages")
+                    {
                         if req.alias == "xChat Assistant" {
                             let mut st = state_clone.lock().unwrap();
                             let hist = st.messages.entry(req.alias.clone()).or_default();

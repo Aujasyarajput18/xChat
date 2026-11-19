@@ -208,6 +208,37 @@ impl BleCentralTransport {
 
                 matching_peripherals.sort_by_key(|a| std::cmp::Reverse(a.2));
 
+                let has_active_connection = {
+                    let connected = self.connected_peers.lock().await;
+                    let mut active = false;
+                    for p in connected.values() {
+                        if p.peripheral.is_connected().await.unwrap_or(false) {
+                            active = true;
+                            break;
+                        }
+                    }
+                    active
+                };
+
+                if has_active_connection {
+                    // Maintain a stable GATT connection. Do not reconnect to rotating BLE private addresses.
+                    continue;
+                }
+
+                // If not connected to any peer, clean up stale references
+                {
+                    let mut connected = self.connected_peers.lock().await;
+                    let mut dead = Vec::new();
+                    for (k, p) in connected.iter() {
+                        if !p.peripheral.is_connected().await.unwrap_or(false) {
+                            dead.push(k.clone());
+                        }
+                    }
+                    for k in dead {
+                        connected.remove(&k);
+                    }
+                }
+
                 if let Some((freshest_p, freshest_id, _)) = matching_peripherals.first() {
                     let should_connect = {
                         let connecting = self.connecting_peers.lock().await;
@@ -327,6 +358,7 @@ impl BleCentralTransport {
 
         let mut tx_subscribed = false;
         if let Some(ref tx) = tx_char {
+            tokio::time::sleep(Duration::from_millis(200)).await;
             match peripheral.notifications().await {
                 Ok(mut stream) => {
                     for attempt in 1..=4 {
@@ -338,10 +370,10 @@ impl BleCentralTransport {
                             }
                             Err(e) => {
                                 warn!(
-                                    "Subscribe attempt {} on {} failed: {}. Retrying in 200ms...",
+                                    "Subscribe attempt {} on {} failed: {}. Retrying in 250ms...",
                                     attempt, peer_id, e
                                 );
-                                tokio::time::sleep(Duration::from_millis(200)).await;
+                                tokio::time::sleep(Duration::from_millis(250)).await;
                             }
                         }
                     }
@@ -460,11 +492,9 @@ impl BleCentralTransport {
 
         if tx_char.is_some() && !tx_subscribed {
             warn!(
-                "TX subscription failed on {}. Disconnecting to allow clean reconnect.",
+                "TX subscription could not be finalized on {}. Maintaining active connection for outbound writes.",
                 peer_id
             );
-            let _ = peripheral.disconnect().await;
-            return;
         }
 
         let connected_peer = ConnectedPeer {
@@ -487,7 +517,7 @@ impl BleCentralTransport {
         if let Some(id_json) = identity_opt {
             if let Ok(id_bytes) = serde_json::to_vec(&id_json) {
                 let msg_id = self.msg_id_counter.fetch_add(1, Ordering::Relaxed);
-                let chunks = BleChunker::chunk_payload(&id_bytes, 180, msg_id);
+                let chunks = BleChunker::chunk_payload(&id_bytes, 23, msg_id);
                 for chunk in chunks {
                     let _ = peripheral
                         .write(&rx_char, &chunk, WriteType::WithoutResponse)
@@ -511,14 +541,27 @@ impl BleCentralTransport {
             peers
                 .get(clean_id)
                 .cloned()
-                .or_else(|| peers.values().next().cloned())
+                .or_else(|| {
+                    // Grab any active connected peer
+                    peers.values().next().cloned()
+                })
         };
 
         if let Some(ref p) = peer_opt {
             if !p.peripheral.is_connected().await.unwrap_or(false) {
-                let mut peers = self.connected_peers.lock().await;
-                peers.remove(clean_id);
-                peer_opt = None;
+                if let Ok(Ok(_)) =
+                    tokio::time::timeout(Duration::from_secs(4), p.peripheral.connect()).await
+                {
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(4),
+                        p.peripheral.discover_services(),
+                    )
+                    .await;
+                } else {
+                    let mut peers = self.connected_peers.lock().await;
+                    peers.retain(|_, v| v.peripheral.id() != p.peripheral.id());
+                    peer_opt = None;
+                }
             }
         }
 
@@ -527,11 +570,13 @@ impl BleCentralTransport {
                 if let Ok(peripherals) = adapter.peripherals().await {
                     for p in peripherals {
                         let pid = p.id().to_string();
-                        let is_match =
-                            pid == clean_id
-                                || p.properties().await.ok().flatten().is_some_and(|props| {
-                                    props.services.contains(&BLE_SERVICE_UUID)
-                                });
+                        let is_match = pid == clean_id
+                            || p.properties().await.ok().flatten().is_some_and(|props| {
+                                props.services.contains(&BLE_SERVICE_UUID)
+                                    || props.local_name.as_ref().is_some_and(|n| {
+                                        n.contains("Nothing") || n.contains("Phone") || n.contains("xChat")
+                                    })
+                            });
                         if is_match {
                             if let Ok(Ok(_)) =
                                 tokio::time::timeout(Duration::from_secs(4), p.connect()).await
@@ -556,7 +601,8 @@ impl BleCentralTransport {
                                             tx_char: tx,
                                         };
                                         let mut peers = self.connected_peers.lock().await;
-                                        peers.insert(pid, connected.clone());
+                                        peers.insert(pid.clone(), connected.clone());
+                                        peers.insert(clean_id.to_string(), connected.clone());
                                         peer_opt = Some(connected);
                                         break;
                                     }
@@ -568,7 +614,7 @@ impl BleCentralTransport {
             }
         }
 
-        let Some(peer) = peer_opt else {
+        let Some(mut peer) = peer_opt else {
             return Err(TransportError::NoRouteToHost(format!(
                 "No connected BLE peer found for '{}'",
                 target_id
@@ -576,20 +622,59 @@ impl BleCentralTransport {
         };
 
         let msg_id = self.msg_id_counter.fetch_add(1, Ordering::Relaxed);
-        let chunks = BleChunker::chunk_payload(data, 180, msg_id);
+        let chunks = BleChunker::chunk_payload(data, 23, msg_id);
 
-        for chunk in chunks {
-            let res = peer
-                .peripheral
-                .write(&peer.rx_char, &chunk, WriteType::WithoutResponse)
-                .await;
-            if res.is_err() {
-                peer.peripheral
-                    .write(&peer.rx_char, &chunk, WriteType::WithResponse)
-                    .await
-                    .map_err(|e| {
-                        TransportError::Serialization(format!("BLE write error: {}", e))
-                    })?;
+        for chunk in &chunks {
+            let mut write_ok = false;
+            for attempt in 0..3 {
+                let res = peer
+                    .peripheral
+                    .write(&peer.rx_char, chunk, WriteType::WithoutResponse)
+                    .await;
+                if res.is_ok() {
+                    write_ok = true;
+                    break;
+                }
+
+                let res2 = peer
+                    .peripheral
+                    .write(&peer.rx_char, chunk, WriteType::WithResponse)
+                    .await;
+                if res2.is_ok() {
+                    write_ok = true;
+                    break;
+                }
+
+                warn!(
+                    "BLE write attempt {} failed ({:?}). Refreshing services...",
+                    attempt + 1,
+                    res2.err()
+                );
+
+                if !peer.peripheral.is_connected().await.unwrap_or(false) {
+                    let _ = tokio::time::timeout(Duration::from_secs(4), peer.peripheral.connect()).await;
+                }
+
+                if let Ok(Ok(_)) = tokio::time::timeout(
+                    Duration::from_secs(3),
+                    peer.peripheral.discover_services(),
+                )
+                .await
+                {
+                    let chars = peer.peripheral.characteristics();
+                    if let Some(fresh_rx) =
+                        chars.iter().find(|c| c.uuid == BLE_RX_CHAR_UUID).cloned()
+                    {
+                        peer.rx_char = fresh_rx;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+
+            if !write_ok {
+                return Err(TransportError::Serialization(
+                    "BLE write failed after service refresh and retries".to_string(),
+                ));
             }
             tokio::time::sleep(Duration::from_millis(15)).await;
         }
