@@ -44,6 +44,7 @@ pub struct AppState {
     pub contacts: Vec<ContactEntry>,
     pub messages: HashMap<String, Vec<ChatMessage>>,
     pub discovery: Arc<PeerDiscoveryEngine>,
+    pub ble_transport: Arc<xchat_transport::ble_central::BleCentralTransport>,
 }
 
 fn detect_local_ip() -> String {
@@ -218,6 +219,8 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
         },
     ];
 
+    let ble_transport = xchat_transport::ble_central::BleCentralTransport::new().await;
+
     let state = Arc::new(Mutex::new(AppState {
         keystore,
         profile: profile.clone(),
@@ -226,7 +229,51 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
         contacts: initial_contacts,
         messages: HashMap::new(),
         discovery: discovery_engine.clone(),
+        ble_transport: ble_transport.clone(),
     }));
+
+    // Spawn background task: inbound physical BLE message dispatcher
+    let inbound_ble_rx = ble_transport.subscribe_inbound_json();
+    let state_ble_inbound = state.clone();
+    tokio::spawn(async move {
+        let mut rx = inbound_ble_rx.lock().await;
+        while let Some(raw_json) = rx.recv().await {
+            if let Ok(data) = serde_json::from_str::<serde_json::Value>(&raw_json) {
+                let sender_alias = data["sender_alias"]
+                    .as_str()
+                    .or_else(|| data["alias"].as_str())
+                    .or_else(|| data["sender"].as_str())
+                    .unwrap_or("Peer")
+                    .to_string();
+                let text = data["text"]
+                    .as_str()
+                    .or_else(|| data["message"].as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let time_str = data["time_str"]
+                    .as_str()
+                    .or_else(|| data["time"].as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(get_now_time_string);
+
+                if !text.is_empty() {
+                    let mut st = state_ble_inbound.lock().unwrap();
+                    let hist = st.messages.entry(sender_alias.clone()).or_default();
+                    hist.push(ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        sender: "peer".to_string(),
+                        text: text.clone(),
+                        time: time_str.clone(),
+                        status: "delivered".to_string(),
+                    });
+                    if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == sender_alias) {
+                        c.last_message = text;
+                        c.last_time = time_str;
+                    }
+                }
+            }
+        }
+    });
 
     // Spawn background task: periodic local UDP beacon broadcast every 4s
     let beacon_engine = discovery_engine.clone();
@@ -510,7 +557,28 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
             } else if path == "/api/discovered" && method == "GET" {
                 let peers_json = {
                     let st = state_clone.lock().unwrap();
-                    let peers = st.discovery.get_active_peers();
+                    let mut peers: Vec<serde_json::Value> = st
+                        .discovery
+                        .get_active_peers()
+                        .into_iter()
+                        .map(|p| serde_json::to_value(p).unwrap_or_default())
+                        .collect();
+
+                    let ble_devs = st.ble_transport.get_discovered_devices();
+                    for b in ble_devs {
+                        peers.push(serde_json::json!({
+                            "username": format!("@{}", b.name.to_lowercase().replace(' ', "_")),
+                            "display_name": b.name,
+                            "address": b.address,
+                            "fingerprint": b.id,
+                            "ip": b.address,
+                            "port": 0,
+                            "transport": "ble",
+                            "rssi": b.rssi,
+                            "last_seen": b.last_seen * 1000
+                        }));
+                    }
+
                     serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_string())
                 };
                 let resp = format!(
@@ -709,8 +777,16 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                     });
                                     let out_body =
                                         serde_json::to_string(&wire_envelope).unwrap_or_default();
-                                    let _ = dispatch_http_post(&target, "/api/receive", &out_body)
-                                        .await;
+                                    if target.starts_with("ble:") {
+                                        let ble_t = {
+                                            let st = state_clone.lock().unwrap();
+                                            st.ble_transport.clone()
+                                        };
+                                        let _ = ble_t.send_raw_bytes(&target, out_body.as_bytes()).await;
+                                    } else {
+                                        let _ = dispatch_http_post(&target, "/api/receive", &out_body)
+                                            .await;
+                                    }
                                 }
                             } else {
                                 // Fallback for standard mobile/Android peers: direct delivery
@@ -723,8 +799,16 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                 });
                                 let out_body =
                                     serde_json::to_string(&wire_envelope).unwrap_or_default();
-                                let _ =
-                                    dispatch_http_post(&target, "/api/receive", &out_body).await;
+                                if target.starts_with("ble:") {
+                                    let ble_t = {
+                                        let st = state_clone.lock().unwrap();
+                                        st.ble_transport.clone()
+                                    };
+                                    let _ = ble_t.send_raw_bytes(&target, out_body.as_bytes()).await;
+                                } else {
+                                    let _ =
+                                        dispatch_http_post(&target, "/api/receive", &out_body).await;
+                                }
                             }
                         }
                     }

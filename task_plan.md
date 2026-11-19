@@ -107,3 +107,18 @@ Build, test, verify, and document a production-grade, full-fledged implementatio
 - [x] Verify Rust tests (`cargo test --workspace`) (All 65 tests passed)
 - [x] Rebuild, align, and sign Android APK (`dist/xchat-v0.1.0.apk` & `dist/xchat.apk`)
 - [x] Commit and push to `origin/main` and `backup/main`
+
+### Phase 12: macOS & Desktop Physical Bluetooth Low Energy (CoreBluetooth) Integration
+- [x] Integrate `btleplug` v0.13.5 with native Apple `CoreBluetooth` framework bindings
+- [x] Implement `BleCentralTransport` in `crates/xchat-transport/src/ble_central.rs`:
+  - Background scanning for `BLE_SERVICE_UUID` (`a495ff10-c5b1-4b44-b512-1370f02d74de`)
+  - Auto-discovery and connection to physical Android GATT servers
+  - Subscription to `BLE_TX_CHAR_UUID` (`a495ff12-...`) for inbound notifications
+  - Sequential chunked writing to `BLE_RX_CHAR_UUID` (`a495ff11-...`) via `BleChunker`
+  - Inbound reassembly via `BleReassembler` with UTF-8 / JSON deserialization
+- [x] Wire `BleCentralTransport` into desktop GUI (`crates/xchat-cli/src/gui.rs`):
+  - Discover BLE peers on Nearby Radar alongside UDP Wi-Fi peers
+  - Direct transmission over BLE for `ble:` targets
+  - Real-time inbound BLE dispatch into chat histories
+- [x] Verify workspace tests (all 65 passed) and live cross-device verification
+- [x] Rebuild signed Android APK and push to `origin/main` & `backup/main`
