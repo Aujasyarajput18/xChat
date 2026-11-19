@@ -32,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -602,20 +603,25 @@ public class BluetoothMeshManager {
         final String cleanMac = targetMac.replace("ble:", "");
 
         // 1. Check if target is an already-connected Central (e.g. Mac)!
-        BluetoothDevice connectedCentral = connectedCentrals.get(cleanMac);
-        if (connectedCentral == null) {
-            connectedCentral = connectedCentrals.get(cleanMac.toLowerCase());
-        }
-        if (connectedCentral == null && !cleanMac.startsWith("@")) {
-            connectedCentral = connectedCentrals.get("@" + cleanMac.toLowerCase());
+        BluetoothDevice connectedCentral = null;
+        if (!cleanMac.isEmpty() && !cleanMac.equalsIgnoreCase("mesh") && !cleanMac.contains(".")) {
+            connectedCentral = connectedCentrals.get(cleanMac);
+            if (connectedCentral == null) {
+                connectedCentral = connectedCentrals.get(cleanMac.toLowerCase());
+            }
+            if (connectedCentral == null && !cleanMac.startsWith("@")) {
+                connectedCentral = connectedCentrals.get("@" + cleanMac.toLowerCase());
+            }
         }
         if (connectedCentral == null && !connectedCentrals.isEmpty()) {
             // If there's an active central connected, use it!
             connectedCentral = connectedCentrals.values().iterator().next();
         }
 
-        if (connectedCentral != null && gattServer != null && txChar != null) {
-            final BluetoothDevice targetDevice = connectedCentral;
+        if ((connectedCentral != null || !connectedCentrals.isEmpty()) && gattServer != null && txChar != null) {
+            final List<BluetoothDevice> targets = (connectedCentral != null && !cleanMac.isEmpty() && !cleanMac.equalsIgnoreCase("mesh") && !cleanMac.contains("."))
+                ? Collections.singletonList(connectedCentral)
+                : new ArrayList<>(new HashSet<>(connectedCentrals.values()));
             new Thread(new Runnable() {
                 @Override
                 public void run() {
@@ -624,43 +630,45 @@ public class BluetoothMeshManager {
                         int msgId = msgIdCounter.getAndIncrement() & 0x7FFF;
                         // Use safe 20-byte chunks for notifications so Android BLE stack never drops them
                         List<byte[]> chunks = chunkPayload(payloadBytes, 20, msgId);
-                        boolean ok = true;
-                        for (byte[] chunk : chunks) {
-                            boolean sent = false;
-                            for (int retry = 0; retry < 4; retry++) {
-                                try {
-                                    txChar.setValue(chunk);
-                                    if (Build.VERSION.SDK_INT >= 33) {
-                                        try {
-                                            int res = gattServer.notifyCharacteristicChanged(targetDevice, txChar, false, chunk);
-                                            if (res == 0) { // BluetoothStatusCodes.SUCCESS
-                                                sent = true;
+                        boolean overallOk = true;
+                        for (BluetoothDevice targetDevice : targets) {
+                            for (byte[] chunk : chunks) {
+                                boolean sent = false;
+                                for (int retry = 0; retry < 4; retry++) {
+                                    try {
+                                        txChar.setValue(chunk);
+                                        if (Build.VERSION.SDK_INT >= 33) {
+                                            try {
+                                                int res = gattServer.notifyCharacteristicChanged(targetDevice, txChar, false, chunk);
+                                                if (res == 0) { // BluetoothStatusCodes.SUCCESS
+                                                    sent = true;
+                                                }
+                                            } catch (Throwable t) {
+                                                // Fallback to legacy
                                             }
-                                        } catch (Throwable t) {
-                                            // Fallback to legacy
                                         }
+                                        if (!sent) {
+                                            try {
+                                                sent = gattServer.notifyCharacteristicChanged(targetDevice, txChar, false);
+                                            } catch (Throwable ignored) {}
+                                        }
+                                        if (sent) {
+                                            break;
+                                        }
+                                    } catch (Throwable t) {
+                                        Log.w(TAG, "Notification attempt " + retry + " failed: " + t.getMessage());
                                     }
-                                    if (!sent) {
-                                        try {
-                                            sent = gattServer.notifyCharacteristicChanged(targetDevice, txChar, false);
-                                        } catch (Throwable ignored) {}
-                                    }
-                                    if (sent) {
-                                        break;
-                                    }
-                                } catch (Throwable t) {
-                                    Log.w(TAG, "Notification attempt " + retry + " failed: " + t.getMessage());
+                                    try { Thread.sleep(20); } catch (Exception ignored) {}
                                 }
-                                try { Thread.sleep(20); } catch (Exception ignored) {}
+                                if (!sent) {
+                                    Log.w(TAG, "notifyCharacteristicChanged failed after retries for " + targetDevice.getAddress());
+                                    overallOk = false;
+                                    break;
+                                }
+                                try { Thread.sleep(15); } catch (Exception ignored) {}
                             }
-                            if (!sent) {
-                                Log.w(TAG, "notifyCharacteristicChanged failed after retries for " + targetDevice.getAddress());
-                                ok = false;
-                                break;
-                            }
-                            try { Thread.sleep(15); } catch (Exception ignored) {}
                         }
-                        if (callback != null) callback.onResult(ok, ok ? null : "GATT notification failed");
+                        if (callback != null) callback.onResult(overallOk, overallOk ? null : "GATT notification failed");
                     } catch (Exception e) {
                         Log.e(TAG, "Error in sendEnvelope GATT notification", e);
                         if (callback != null) callback.onResult(false, e.getMessage());

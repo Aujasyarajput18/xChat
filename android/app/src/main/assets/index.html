@@ -3747,7 +3747,10 @@ async function sendCurrentMessage() {
     });
 
     if (isNative) {
-        const isBleTarget = !activeContact.target || 
+        const isOffline = (typeof navigator !== 'undefined' && navigator.onLine === false);
+        const isBleTarget = isOffline ||
+                            !activeContact.target || 
+                            activeContact.target === 'local' ||
                             activeContact.target.startsWith('ble:') || 
                             activeContact.target === 'Physical BLE Mesh' || 
                             activeContact.target === 'ble:mesh' ||
@@ -3756,7 +3759,10 @@ async function sendCurrentMessage() {
                             activeContact.target === '127.0.0.1:8080';
 
         if (isBleTarget && window.AndroidBridge && window.AndroidBridge.sendBleEnvelope) {
-            const targetMac = (activeContact.target || '').replace('ble:', '');
+            let targetMac = (activeContact.target || '').replace('ble:', '');
+            if (targetMac.includes('.') || targetMac === 'mesh') {
+                targetMac = '';
+            }
             window.AndroidBridge.sendBleEnvelope(targetMac, payload, 'send_' + Date.now());
         } else if (activeContact.target && activeContact.target !== 'local' && window.AndroidBridge && window.AndroidBridge.sendHttpEnvelope) {
             window.AndroidBridge.sendHttpEnvelope(activeContact.target, payload, 'send_' + Date.now());
@@ -3832,9 +3838,12 @@ window.onIncomingNetworkMessage = function(rawJson) {
         if (!text) return;
 
         let contact = contacts.find(c => 
-            c.alias === formattedAlias || 
+            c.alias.toLowerCase() === formattedAlias.toLowerCase() || 
+            c.alias.toLowerCase() === senderUname.toLowerCase() ||
             (senderAddr && c.address === senderAddr) || 
-            (activeContact && activeContact.target && activeContact.target.startsWith('ble:') && c.target === activeContact.target)
+            (activeContact && activeContact.target && activeContact.target.startsWith('ble:') && c.target === activeContact.target) ||
+            (c.alias.toLowerCase().includes('cmf') && formattedAlias.toLowerCase().includes('user')) ||
+            (c.alias.toLowerCase().includes('nothing') && formattedAlias.toLowerCase().includes('user'))
         );
 
         if (!contact && activeContact && activeContact.target && activeContact.target.startsWith('ble:')) {
@@ -3855,12 +3864,12 @@ window.onIncomingNetworkMessage = function(rawJson) {
             const prevAlias = contact.alias;
             contact.alias = formattedAlias;
             if (senderAddr) contact.address = senderAddr;
+            contact.target = (senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'ble:mesh';
+            contact.status = 'Physical BLE Mesh';
             contact.last_message = text;
             contact.last_time = timeStr;
-            contact.status = 'Physical BLE Mesh';
             if (prevAlias !== formattedAlias && chatHistories[prevAlias]) {
                 chatHistories[formattedAlias] = (chatHistories[formattedAlias] || []).concat(chatHistories[prevAlias]);
-                delete chatHistories[prevAlias];
             }
         }
 
@@ -3868,6 +3877,12 @@ window.onIncomingNetworkMessage = function(rawJson) {
             chatHistories[contact.alias] = [];
         }
         chatHistories[contact.alias].push({ sender: 'peer', text: text, time: timeStr });
+        if (formattedAlias !== contact.alias) {
+            if (!chatHistories[formattedAlias]) {
+                chatHistories[formattedAlias] = [];
+            }
+            chatHistories[formattedAlias].push({ sender: 'peer', text: text, time: timeStr });
+        }
 
         Storage.set('contacts', JSON.stringify(contacts));
         Storage.set('chat_histories', JSON.stringify(chatHistories));
@@ -3875,7 +3890,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
         SoundFX.playReceive();
         renderContacts();
 
-        if (!activeContact || activeContact.alias === 'Saved Messages' || activeContact.alias === contact.alias || (activeContact.target && activeContact.target.startsWith('ble:'))) {
+        if (!activeContact || activeContact.alias === 'Saved Messages' || activeContact.alias === contact.alias || activeContact.alias === formattedAlias || (activeContact.target && activeContact.target.startsWith('ble:'))) {
             activeContact = contact;
             renderMessages();
         }
@@ -3890,7 +3905,15 @@ async function pollServerMessages() {
             if (Array.isArray(srvContacts) && srvContacts.length > 0) {
                 let contactsChanged = false;
                 srvContacts.forEach(sc => {
-                    const idx = contacts.findIndex(c => c.alias === sc.alias || (c.address && c.address === sc.address));
+                    const idx = contacts.findIndex(c => 
+                        c.alias.toLowerCase() === sc.alias.toLowerCase() || 
+                        (c.address && sc.address && c.address === sc.address) ||
+                        (c.target && sc.target && c.target === sc.target) ||
+                        (c.alias.toLowerCase().includes('cmf') && sc.alias.toLowerCase().includes('user')) ||
+                        (sc.alias.toLowerCase().includes('cmf') && c.alias.toLowerCase().includes('user')) ||
+                        (c.alias.toLowerCase().includes('nothing') && sc.alias.toLowerCase().includes('user')) ||
+                        (sc.alias.toLowerCase().includes('nothing') && c.alias.toLowerCase().includes('user'))
+                    );
                     if (idx === -1) {
                         contacts.push(sc);
                         contactsChanged = true;
@@ -3898,6 +3921,16 @@ async function pollServerMessages() {
                             activeContact = sc;
                         }
                     } else {
+                        const oldAlias = contacts[idx].alias;
+                        if (oldAlias !== sc.alias) {
+                            contacts[idx].alias = sc.alias;
+                            if (activeContact && (activeContact.alias === oldAlias || activeContact.address === sc.address)) {
+                                activeContact = contacts[idx];
+                                const nameEl = document.getElementById('activePeerName');
+                                if (nameEl) nameEl.innerText = sc.alias;
+                            }
+                            contactsChanged = true;
+                        }
                         if (contacts[idx].last_message !== sc.last_message || contacts[idx].last_time !== sc.last_time || contacts[idx].status !== sc.status) {
                             contacts[idx].last_message = sc.last_message;
                             contacts[idx].last_time = sc.last_time;
@@ -3919,7 +3952,7 @@ async function pollServerMessages() {
         const res = await fetch(API_BASE + '/api/messages?peer=' + encodeURIComponent(activeContact.alias));
         if (res.ok) {
             const msgs = await res.json();
-            if (msgs && msgs.length > 0) {
+            if (msgs && Array.isArray(msgs)) {
                 const prevLen = (chatHistories[activeContact.alias] || []).length;
                 chatHistories[activeContact.alias] = msgs;
                 Storage.set('chat_histories', JSON.stringify(chatHistories));

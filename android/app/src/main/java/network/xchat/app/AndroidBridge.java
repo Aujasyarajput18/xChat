@@ -626,8 +626,8 @@ public class AndroidBridge {
                     });
                 } catch (Exception e) {
                     // If HTTP delivery failed (e.g. offline with Wi-Fi disabled), check if BLE mesh is active
-                    if (bleManager != null && bleManager.isSupported() && bleManager.hasConnectedCentrals()) {
-                        bleManager.sendEnvelope(targetHostPort, jsonPayload, new BluetoothMeshManager.BleSendCallback() {
+                    if (bleManager != null && bleManager.isSupported()) {
+                        bleManager.sendEnvelope("", jsonPayload, new BluetoothMeshManager.BleSendCallback() {
                             @Override
                             public void onResult(final boolean success, final String error) {
                                 activity.runOnUiThread(new Runnable() {

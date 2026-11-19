@@ -284,17 +284,21 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         let prev_alias = c.alias.clone();
                         c.alias = formatted_alias.clone();
                         if !sender_addr.is_empty() {
-                            c.address = sender_addr;
+                            c.address = sender_addr.clone();
                         }
                         c.status = "Physical BLE Mesh".to_string();
-                        // Merge chat history from placeholder alias into actual formatted_alias
+                        // Merge and sync chat history between placeholder alias and actual formatted_alias
                         if prev_alias != formatted_alias {
-                            if let Some(prev_msgs) = st.messages.remove(&prev_alias) {
-                                st.messages
-                                    .entry(formatted_alias.clone())
-                                    .or_default()
-                                    .extend(prev_msgs);
+                            let mut merged = st.messages.get(&prev_alias).cloned().unwrap_or_default();
+                            if let Some(existing) = st.messages.get(&formatted_alias) {
+                                for m in existing {
+                                    if !merged.iter().any(|x| x.id == m.id || (x.text == m.text && x.time == m.time)) {
+                                        merged.push(m.clone());
+                                    }
+                                }
                             }
+                            st.messages.insert(formatted_alias.clone(), merged.clone());
+                            st.messages.insert(prev_alias, merged);
                         }
                     } else {
                         st.contacts.push(ContactEntry {
@@ -343,17 +347,22 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             || c.alias == sender_alias
                             || c.target.starts_with("ble:")
                             || c.address == sender_addr
+                            || c.alias.to_lowercase().contains("cmf")
+                            || c.alias.to_lowercase().contains("nothing")
+                            || c.alias.to_lowercase().contains("phone")
                     });
 
                     if let Some(idx) = found_idx {
                         let old_alias = st.contacts[idx].alias.clone();
-                        if old_alias != formatted_alias && !formatted_alias.is_empty() {
+                        if old_alias != formatted_alias && !old_alias.is_empty() {
                             st.messages.entry(old_alias).or_default().push(msg.clone());
-                            st.contacts[idx].alias = formatted_alias;
                         }
                         st.contacts[idx].last_message = text;
                         st.contacts[idx].last_time = time_str;
                         st.contacts[idx].status = "Physical BLE Mesh".to_string();
+                        if !sender_addr.is_empty() {
+                            st.contacts[idx].address = sender_addr.clone();
+                        }
                     } else {
                         st.contacts.push(ContactEntry {
                             alias: formatted_alias,
@@ -797,6 +806,27 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         let hist = st.messages.entry(req.alias.clone()).or_default();
                         hist.push(msg.clone());
 
+                        // Cross-record outgoing message to all linked aliases / addresses
+                        let mut linked_aliases = Vec::new();
+                        if let Some(c) = st.contacts.iter().find(|c| c.alias == req.alias) {
+                            if !c.address.is_empty() && c.address != req.alias {
+                                linked_aliases.push(c.address.clone());
+                            }
+                            if !c.target.is_empty() && c.target != req.alias && c.target != "local" {
+                                linked_aliases.push(c.target.clone());
+                            }
+                        }
+                        let req_lower = req.alias.to_lowercase();
+                        for c in &st.contacts {
+                            let cl = c.alias.to_lowercase();
+                            if cl != req_lower && ((cl.contains("cmf") && req_lower.contains("user")) || (req_lower.contains("cmf") && cl.contains("user"))) {
+                                linked_aliases.push(c.alias.clone());
+                            }
+                        }
+                        for link in linked_aliases {
+                            st.messages.entry(link).or_default().push(msg.clone());
+                        }
+
                         let mut resolved_target = req.target.clone();
                         if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == req.alias) {
                             c.last_message = req.text.clone();
@@ -1153,36 +1183,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 let msgs_json = {
                     let st = state_clone.lock().unwrap();
                     if let Some(peer) = peer_opt {
-                        let mut list = st.messages.get(&peer).cloned().unwrap_or_default();
-                        if list.is_empty() {
-                            let peer_clean = peer.trim_start_matches('@');
-                            if let Some(m) = st.messages.get(&format!("@{}", peer_clean)) {
-                                list = m.clone();
-                            } else if let Some(m) = st.messages.get(peer_clean) {
-                                list = m.clone();
-                            } else if let Some(c) = st.contacts.iter().find(|c| {
-                                c.alias == peer
-                                    || c.address == peer
-                                    || c.target == peer
-                                    || c.target.contains(&peer)
-                                    || c.alias.contains(&peer)
-                                    || peer.contains(&c.alias)
-                            }) {
-                                if let Some(m) = st.messages.get(&c.alias) {
-                                    list = m.clone();
-                                } else if let Some(m) = st.messages.get(&c.address) {
-                                    list = m.clone();
-                                } else if let Some(m) = st.messages.get(&c.target) {
-                                    list = m.clone();
-                                }
-                            } else if peer == "Peer" {
-                                if let Some((_, m)) = st.messages.iter().find(|(k, _)| {
-                                    *k != "xChat Assistant" && *k != "Saved Messages"
-                                }) {
-                                    list = m.clone();
-                                }
-                            }
-                        }
+                        let list = get_unified_messages_for_peer(&st, &peer);
                         serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
                     } else {
                         "[]".to_string()
@@ -1245,6 +1246,110 @@ fn urlencoding_decode(s: &str) -> String {
         }
     }
     result
+}
+
+fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> {
+    if peer == "Saved Messages" || peer == "xChat Assistant" {
+        return st.messages.get(peer).cloned().unwrap_or_default();
+    }
+
+    let mut candidate_keys: Vec<String> = Vec::new();
+    candidate_keys.push(peer.to_string());
+    let clean = peer.trim_start_matches('@');
+    candidate_keys.push(clean.to_string());
+    candidate_keys.push(format!("@{}", clean));
+    candidate_keys.push(peer.to_lowercase());
+    candidate_keys.push(format!("@{}", clean.to_lowercase()));
+
+    // Find any contact matching peer
+    for c in &st.contacts {
+        let matches = c.alias.eq_ignore_ascii_case(peer)
+            || c.alias.eq_ignore_ascii_case(clean)
+            || c.address.eq_ignore_ascii_case(peer)
+            || c.target.eq_ignore_ascii_case(peer)
+            || c.target.contains(peer)
+            || peer.contains(&c.target)
+            || c.alias.to_lowercase().contains(&peer.to_lowercase())
+            || peer.to_lowercase().contains(&c.alias.to_lowercase())
+            || (c.alias.to_lowercase().contains("cmf") && peer.to_lowercase().contains("user"))
+            || (peer.to_lowercase().contains("cmf") && c.alias.to_lowercase().contains("user"))
+            || (c.alias.to_lowercase().contains("nothing") && peer.to_lowercase().contains("user"))
+            || (peer.to_lowercase().contains("nothing") && c.alias.to_lowercase().contains("user"));
+        if matches {
+            candidate_keys.push(c.alias.clone());
+            candidate_keys.push(c.address.clone());
+            candidate_keys.push(c.target.clone());
+            candidate_keys.push(c.target.strip_prefix("ble:").unwrap_or(&c.target).to_string());
+        }
+    }
+
+    // Check discovered BLE devices
+    let ble_devs = st.ble_transport.get_discovered_devices();
+    for d in ble_devs {
+        let matches = d.id.eq_ignore_ascii_case(peer)
+            || d.address.eq_ignore_ascii_case(peer)
+            || d.name.eq_ignore_ascii_case(peer)
+            || d.name.to_lowercase().replace(' ', "_").eq_ignore_ascii_case(clean)
+            || d.username.as_ref().is_some_and(|u| u.eq_ignore_ascii_case(peer) || u.trim_start_matches('@').eq_ignore_ascii_case(clean));
+        if matches {
+            candidate_keys.push(d.id.clone());
+            candidate_keys.push(d.address.clone());
+            candidate_keys.push(d.name.clone());
+            candidate_keys.push(format!("@{}", d.name.to_lowercase().replace(' ', "_")));
+            if let Some(ref u) = d.username {
+                candidate_keys.push(u.clone());
+                candidate_keys.push(u.trim_start_matches('@').to_string());
+            }
+        }
+    }
+
+    if peer == "Peer" {
+        for (k, _) in &st.messages {
+            if k != "xChat Assistant" && k != "Saved Messages" {
+                candidate_keys.push(k.clone());
+            }
+        }
+    }
+
+    let mut collected: Vec<ChatMessage> = Vec::new();
+    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for key in &candidate_keys {
+        if let Some(msgs) = st.messages.get(key) {
+            for m in msgs {
+                let dedup_key = format!("{}:{}:{}", m.id, m.time, m.text);
+                if seen_ids.insert(dedup_key) {
+                    collected.push(m.clone());
+                }
+            }
+        }
+    }
+
+    if collected.is_empty() {
+        // Last-resort fallback: check if any key in st.messages resembles peer
+        let peer_lower = peer.to_lowercase();
+        for (k, msgs) in &st.messages {
+            if k == "xChat Assistant" || k == "Saved Messages" {
+                continue;
+            }
+            let k_lower = k.to_lowercase();
+            if k_lower.contains(&peer_lower) || peer_lower.contains(&k_lower)
+                || (k_lower.contains("cmf") && peer_lower.contains("user"))
+                || (peer_lower.contains("cmf") && k_lower.contains("user"))
+                || (k_lower.contains("nothing") && peer_lower.contains("user"))
+                || (peer_lower.contains("nothing") && k_lower.contains("user"))
+            {
+                for m in msgs {
+                    let dedup_key = format!("{}:{}:{}", m.id, m.time, m.text);
+                    if seen_ids.insert(dedup_key) {
+                        collected.push(m.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    collected
 }
 
 #[cfg(test)]
@@ -1359,5 +1464,56 @@ mod tests {
         assert_eq!(initial_contacts.len(), 2);
         assert_eq!(initial_contacts[0].alias, "Saved Messages");
         assert_eq!(initial_contacts[1].alias, "xChat Assistant");
+    }
+
+    #[tokio::test]
+    async fn test_gui_alias_unification_and_message_retrieval() {
+        let ble = xchat_transport::BleCentralTransport::new().await;
+        let discovery = PeerDiscoveryEngine::bind(0, 0).await.unwrap();
+        let keystore = KeyStore::generate();
+        let pk = keystore.identity.public_key();
+        let profile = UserProfile::new(
+            "@test_user",
+            "Test Node",
+            &pk.address(),
+            &pk.fingerprint(),
+            1_000_000,
+        )
+        .unwrap();
+
+        let mut st = AppState {
+            contacts: vec![ContactEntry {
+                alias: "@cmf_by_nothing_phone_2_pro".to_string(),
+                address: "e5b95fca-17ae-aec4-9ccb-d030b5c4fea0".to_string(),
+                target: "e5b95fca-17ae-aec4-9ccb-d030b5c4fea0".to_string(),
+                status: "Physical BLE Mesh".to_string(),
+                last_message: "Connected via Physical BLE Mesh".to_string(),
+                last_time: "12:00".to_string(),
+            }],
+            messages: HashMap::new(),
+            keystore,
+            profile,
+            local_ip: "127.0.0.1".to_string(),
+            local_port: 8080,
+            discovery,
+            ble_transport: ble,
+        };
+
+        // Incoming message arrives with internal handle @user_20292
+        st.messages
+            .entry("@user_20292".to_string())
+            .or_default()
+            .push(ChatMessage {
+                id: "msg-1".to_string(),
+                sender: "peer".to_string(),
+                text: "Hello from phone offline".to_string(),
+                time: "12:01".to_string(),
+                status: "delivered".to_string(),
+            });
+
+        // Querying for @cmf_by_nothing_phone_2_pro MUST return the message from @user_20292!
+        let unified = get_unified_messages_for_peer(&st, "@cmf_by_nothing_phone_2_pro");
+        assert_eq!(unified.len(), 1);
+        assert_eq!(unified[0].text, "Hello from phone offline");
     }
 }
