@@ -157,28 +157,33 @@ input, textarea {
 .ico-xl { width: 48px; height: 48px; }
 
 .ico--cyan {
-  stroke: url(#holo-cyan);
   color: var(--holo-cyan);
+  stroke: var(--holo-cyan);
+  stroke: url(#holo-cyan);
   --glow: var(--holo-cyan);
 }
 .ico--mint {
-  stroke: url(#holo-mint);
   color: var(--holo-mint);
+  stroke: var(--holo-mint);
+  stroke: url(#holo-mint);
   --glow: var(--holo-mint);
 }
 .ico--amber {
-  stroke: url(#holo-amber);
   color: var(--holo-amber);
+  stroke: var(--holo-amber);
+  stroke: url(#holo-amber);
   --glow: var(--holo-amber);
 }
 .ico--coral {
-  stroke: url(#holo-coral);
   color: var(--holo-coral);
+  stroke: var(--holo-coral);
+  stroke: url(#holo-coral);
   --glow: var(--holo-coral);
 }
 .ico--violet {
-  stroke: url(#holo-violet);
   color: var(--holo-violet);
+  stroke: var(--holo-violet);
+  stroke: url(#holo-violet);
   --glow: var(--holo-violet);
 }
 .ico--grey, .ico--muted {
@@ -1833,7 +1838,7 @@ details.expander[open] {
 <body>
 
 <!-- HOLO ICON SPRITE (36 Lucide Symbols) -->
-<svg style="display:none" aria-hidden="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;" aria-hidden="true">
   <defs>
     <linearGradient id="holo-cyan" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
       <stop offset="0%" stop-color="#7dd3fc"/>

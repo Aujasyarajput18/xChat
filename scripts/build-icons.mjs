@@ -54,7 +54,7 @@ export function buildSprite(icons = Object.keys(ICON_DEFINITIONS)) {
     return `  <symbol id="i-${name}" viewBox="0 0 24 24">${body}</symbol>`;
   }).join('\n');
 
-  return `<svg style="display:none" aria-hidden="true">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;pointer-events:none;" aria-hidden="true">
   <defs>
     <linearGradient id="holo-cyan" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="24" y2="24">
       <stop offset="0%" stop-color="#7dd3fc"/>

@@ -1117,7 +1117,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else {
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nCache-Control: no-cache, no-store, must-revalidate\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     EMBEDDED_HTML.len(),
                     EMBEDDED_HTML
                 );
