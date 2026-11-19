@@ -4,7 +4,9 @@ use std::{
     path::Path,
 };
 
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use xchat_crypto::aead::{decrypt_aead, encrypt_aead};
 
 use crate::{
     envelope::{EncryptedEnvelope, MessageId},
@@ -95,7 +97,7 @@ impl StoreAndForwardQueue {
         Ok(())
     }
 
-    /// Restore the encrypted queue from a disk file.
+    /// Restore the unencrypted queue from a disk file.
     pub fn load_from_disk(path: &Path) -> Result<Self, CoreError> {
         if !path.exists() {
             return Ok(Self::new());
@@ -105,6 +107,61 @@ impl StoreAndForwardQueue {
         file.read_to_end(&mut buffer)
             .map_err(|e| CoreError::StorageError(e.to_string()))?;
         bincode::deserialize(&buffer).map_err(|e| CoreError::StorageError(e.to_string()))
+    }
+
+    /// Persist the queue encrypted with ChaCha20-Poly1305 and a CSPRNG nonce to disk.
+    pub fn save_to_disk_encrypted(
+        &self,
+        path: &Path,
+        encryption_key: &[u8; 32],
+    ) -> Result<(), CoreError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| CoreError::StorageError(e.to_string()))?;
+        }
+        let serialized =
+            bincode::serialize(self).map_err(|e| CoreError::StorageError(e.to_string()))?;
+        let mut nonce = [0u8; 12];
+        OsRng.fill_bytes(&mut nonce);
+        let ciphertext = encrypt_aead(encryption_key, &nonce, &serialized, b"xchat-outbox-v1")
+            .map_err(CoreError::Crypto)?;
+
+        let mut output = Vec::with_capacity(12 + ciphertext.len());
+        output.extend_from_slice(&nonce);
+        output.extend_from_slice(&ciphertext);
+
+        let mut file = File::create(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
+        file.write_all(&output)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Restore the queue from an encrypted disk file using ChaCha20-Poly1305.
+    pub fn load_from_disk_encrypted(
+        path: &Path,
+        encryption_key: &[u8; 32],
+    ) -> Result<Self, CoreError> {
+        if !path.exists() {
+            return Ok(Self::new());
+        }
+        let mut file = File::open(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)
+            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+
+        if data.len() < 12 {
+            return Err(CoreError::StorageError(
+                "Corrupted outbox file: missing nonce header".into(),
+            ));
+        }
+
+        let (nonce_bytes, ciphertext) = data.split_at(12);
+        let mut nonce = [0u8; 12];
+        nonce.copy_from_slice(nonce_bytes);
+
+        let decrypted = decrypt_aead(encryption_key, &nonce, ciphertext, b"xchat-outbox-v1")
+            .map_err(CoreError::Crypto)?;
+
+        bincode::deserialize(&decrypted).map_err(|e| CoreError::StorageError(e.to_string()))
     }
 }
 
@@ -166,5 +223,42 @@ mod tests {
 
         let loaded = StoreAndForwardQueue::load_from_disk(path).unwrap();
         assert_eq!(loaded.len(), 1);
+    }
+
+    #[test]
+    fn test_outbox_encrypted_disk_persistence() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let key = [0x55u8; 32];
+
+        let mut outbox = StoreAndForwardQueue::new();
+        let header = RoutingHeader::new([0x88; 16], 3000, 3600);
+        let env = EncryptedEnvelope {
+            header,
+            ratchet_header: None,
+            x3dh_init: None,
+            ciphertext: b"Confidential Outbox Payload".to_vec(),
+        };
+
+        outbox.enqueue(env);
+        outbox.save_to_disk_encrypted(path, &key).unwrap();
+
+        // 1. Successful decrypt with legitimate key
+        let loaded = StoreAndForwardQueue::load_from_disk_encrypted(path, &key).unwrap();
+        assert_eq!(loaded.len(), 1);
+
+        // 2. Failure with wrong key
+        let wrong_key = [0x99u8; 32];
+        let err_wrong = StoreAndForwardQueue::load_from_disk_encrypted(path, &wrong_key);
+        assert!(err_wrong.is_err());
+
+        // 3. Failure on tampered ciphertext (integrity check)
+        let mut raw_bytes = std::fs::read(path).unwrap();
+        let last_idx = raw_bytes.len() - 1;
+        raw_bytes[last_idx] ^= 0x01; // flip 1 bit
+        std::fs::write(path, raw_bytes).unwrap();
+
+        let err_tamper = StoreAndForwardQueue::load_from_disk_encrypted(path, &key);
+        assert!(err_tamper.is_err());
     }
 }

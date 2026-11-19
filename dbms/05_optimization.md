@@ -4,7 +4,7 @@
 **Module:** DBMS Query Optimization, Index Tuning & Execution Plan Analysis  
 **Author:** Aryan Singh Damara  
 **Course:** Advanced Programming / Database Management Systems  
-**Evaluation Target:** CP4 (`dbms/05_optimization.md` & `dbms/plans/`)  
+**Evaluation Target:** CP4 (`dbms/05_optimization.md`, `dbms/05_query_timings.md` & `dbms/plans/`)  
 **Prerequisites:** CP1 (`01_normalization.md`) · CP2 (`02_er_diagram.md` + `03_schema.sql`) · CP3 (`04_queries.sql` + `04_queries.md`)  
 **Date:** November 2026  
 
@@ -429,9 +429,9 @@ The empirical benchmark results recorded in `dbms/plans/04_benchmark_results.txt
 | **Q1** | Active Conversation Feed | Table Join + Dual Temp B-Trees | CTE + Covering Index | **9.951 ms** | **8.679 ms** | **+12.8%** | **2 $\to$ 0 (Eliminated)** |
 | **Q2** | Unread Badge Counter | Non-Covering Sent-At Index | 3-Column Covering Index Seek | **9.374 ms** | **9.340 ms** | **Covering** | Zero table reads |
 | **Q3** | Thread History (20 msgs) | Covering Sent-At Index Seek | Covering Sent-At Index Seek | **8.425 ms** | **8.486 ms** | **$O(\log N)$** | Constant $O(\log N)$ |
-| **Q5** | Outbox Priority Dispatcher | Full Range + In-Memory Sort | Pre-Sorted Partial B-Tree | **7.075 ms** | **7.124 ms** | **Pre-Sorted** | **1 $\to$ 0 (Eliminated)** |
-
----
+> [!NOTE]
+> For the exhaustive, high-resolution statistical benchmark matrix covering all 23 queries, views, and ACID transactions (with Mean, Min, P50, P90, P99, Max, and StdDev metrics across 100 warm iterations), refer to the dedicated timing report:
+> **[dbms/05_query_timings.md](05_query_timings.md)** and machine-readable data in **[dbms/plans/benchmark_summary.json](plans/benchmark_summary.json)**.
 
 ### 7.3 Memory, Sorting & Cache-Line Efficiency
 

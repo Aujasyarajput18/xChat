@@ -1,0 +1,511 @@
+# xChat User Manual & Deployment Guide
+
+**Version:** 1.0  
+**Target Audience:** Users, field operators, and engineers deploying xChat across Android, iOS, macOS, Linux, and Windows devices.
+
+---
+
+## 1. Introduction
+
+**xChat** is a decentralized, peer-to-peer private messenger designed to operate completely without internet access, cellular networks, or central servers.
+
+- **No Central Servers:** Communication is direct between devices or relayed through friendly mesh nodes.
+- **No Phone Numbers or Emails:** Your identity is an Ed25519/X25519 cryptographic keypair generated entirely on your device.
+- **Transport Independent:** Operates over Bluetooth Low Energy (BLE), Local Wi-Fi, Wi-Fi Direct, or Internet TCP/IP.
+- **Relay Blindness:** Intermediate relay devices store and forward messages without being able to read message contents or determine who is talking to whom.
+
+---
+
+## 2. Platform Installation & 1-Click Quick Start
+
+### ⚡ Universal 1-Click Auto-Detect Launchers (Recommended)
+
+xChat includes a universal auto-detection system that detects your operating system (macOS, Windows, Linux, Android), configures the binaries, sets up cryptographic identities, and automatically launches the App GUI in your browser.
+
+#### Option A: 1-Click Launchers (No terminal needed)
+- **macOS:** Download [**`xchat-setup.command`**](https://github.com/EdgeRunner-runit/xChat_AP_2026/releases/download/v0.1.0/xchat-setup.command) and double-click it in Finder. Terminal will open, auto-configure xChat, and pop open your browser to `http://127.0.0.1:4000`.
+- **Windows:** Download [**`xchat-launcher.bat`**](https://github.com/EdgeRunner-runit/xChat_AP_2026/releases/download/v0.1.0/xchat-launcher.bat) or [**`xchat-universal.bat`**](https://github.com/EdgeRunner-runit/xChat_AP_2026/releases/download/v0.1.0/xchat-universal.bat) and double-click it. It configures the environment and launches your default browser.
+- **Linux & Android (Termux):** Download and run:
+  ```bash
+  chmod +x xchat-launcher.sh && ./xchat-launcher.sh
+  ```
+
+#### Option B: Universal One-Liner (Any Unix / Mac / Linux / Android)
+```bash
+curl -fsSL https://raw.githubusercontent.com/EdgeRunner-runit/xChat_AP_2026/main/install.sh | bash
+```
+
+---
+
+### Manual Platform Setup
+
+### macOS
+1. Download `xchat-v0.1.0-macos-universal.tar.gz` (Apple Silicon M1/M2/M3/M4 & Intel).
+2. Extract and move to your path:
+   ```bash
+   tar -xzvf xchat-v0.1.0-macos-universal.tar.gz
+   sudo mv xchat /usr/local/bin/
+   ```
+3. Test installation:
+   ```bash
+   xchat --help
+   ```
+
+### Linux (Ubuntu / Debian / Fedora / Arch)
+1. Download `xchat-linux-x86_64.tar.gz`.
+2. Extract and install:
+   ```bash
+   tar -xzvf xchat-linux-x86_64.tar.gz
+   sudo mv xchat /usr/local/bin/
+   chmod +x /usr/local/bin/xchat
+   ```
+
+### Windows 10 / 11
+1. Download `xchat-windows-x86_64.zip`.
+2. Extract `xchat.exe` to a folder (e.g. `C:\Tools\xchat\`).
+3. Open PowerShell or Command Prompt:
+   ```powershell
+   .\xchat.exe --help
+   ```
+
+### Android
+
+#### Method A — Standalone APK Installation (Recommended — Zero Technical Setup)
+Most Android users do not have Termux and prefer a standard Android application experience:
+1. Download **[`xchat-v0.1.0.apk`](https://github.com/EdgeRunner-runit/xChat_AP_2026/releases/download/v0.1.0/xchat-v0.1.0.apk)** directly on your Android phone from GitHub Releases.
+2. Tap the downloaded file in your browser downloads or Files app.
+3. If prompted by Android, enable **"Allow from this source"** (standard prompt for sideloaded APKs).
+4. Tap **Install** and then **Open**.
+5. The xChat app launches with:
+   - Full dark-themed mobile UI
+   - Automatic cryptographic key generation on device
+   - Contact book with live reachability ping
+   - Direct ratcheted E2EE chat
+   - One-touch Emergency SOS distress beacon with Morse vibration
+   - Ephemeral burner rooms
+   - Native Android share sheet integration to easily send your `xchat_<hex>` address to friends.
+
+#### Method B — Termux CLI / Daemon (For Advanced Users & Relays):
+1. Install [Termux](https://f-droid.org/en/packages/com.termux/) from F-Droid.
+2. Inside Termux, install Rust or download the pre-compiled ARM64 binary:
+   ```bash
+   pkg update && pkg install git rust
+   git clone https://github.com/EdgeRunner-runit/xChat_AP_2026.git
+   cd xChat_AP_2026
+   cargo build --release
+   cp target/release/xchat-cli $PREFIX/bin/xchat
+   ```
+3. Run:
+   ```bash
+   xchat keygen
+   ```
+
+**Method B — Native App Integration:**
+- The core cryptographic and routing engine builds into an Android NDK shared library (`libxchat_core.so`) via UniFFI, embeddable into any Kotlin / Android Studio app.
+
+### iOS
+- Run directly inside local terminal environments like **iSH** or **a-Shell** on iPadOS/iOS.
+- For native Swift apps, xChat's Rust core compiles to an XCFramework (`xchat.xcframework`) linked into iOS apps.
+
+---
+
+## 3. Step-by-Step Usage
+
+### Step 0: Launch the Sleek Telegram-Styled App GUI
+
+Run:
+```bash
+xchat app
+```
+*(or `xchat gui`)*
+
+This boots your local encrypted node and automatically opens a responsive, **Obsidian Noir graphical user interface with Pastel accents** in your default browser at `http://localhost:8080` (or accessible over LAN at `http://<your-ip>:8080`).
+
+#### 🎨 CashPilot Obsidian Noir Design Language
+- **Pitch-Black Canvas (`#000000` / `#0a0a0a`):** True OLED pitch black designed for maximum power efficiency and high-end visual elegance.
+- **Pastel Lavender (`#d4c4fb`) & Sage Mint (`#bbf49b`):** High-contrast pastel highlights for buttons, badges, active squircle borders, and subtle glows.
+- **Seamless Usernames (`@handle`):** Replace raw cryptic IP addresses with human-readable usernames while preserving strict cryptographic identity guarantees.
+- **Nearby Mesh Radar Carousel:** Live horizontal radar strip showing automatically discovered local Wi-Fi and hotspot peers with 1-tap connection.
+- **Luxury Designer QR Code:** Rounded-dot gradient QR code matrix with an embedded central glowing xChat shield emblem and live camera viewfinder scanner.
+- **Visual Safety Fingerprint:** 6-symbol emoji blocks (e.g. `🍀⚡👑🌈🎯🧩`) for effortless verbal verification against man-in-the-middle attacks.
+- **Message Bubbles & Read Receipts:** Incoming obsidian cards (`#141414`) and outgoing pastel lavender bubbles (`#d4c4fb`) with timestamps and double checkmarks (`✓✓`).
+
+---
+
+### Step 0.5: Real Cross-Device Zero-Config Tutorial (Phone ↔ Laptop ↔ PC)
+
+Two users with different devices (e.g., an Android phone running `xchat.apk` and a MacBook/Linux/Windows machine running `xchat app`) can communicate effortlessly without ever typing IP addresses:
+
+#### Method 1: Nearby Mesh Radar (Zero-Config Automatic Discovery)
+1. **Connect both devices to the same Wi-Fi network or a phone hotspot** (no internet or mobile data required).
+2. **Open xChat on both devices:**
+   - Launch the **xChat app** on Android or run `xchat app` on your computer.
+3. **Check the Nearby Mesh Radar:**
+   - In the top carousel below the search bar, nearby peers appear automatically via UDP beacons.
+   - Tap your friend's avatar in the radar strip — xChat automatically resolves their socket address, verifies their cryptographic identity, and creates an encrypted channel!
+
+#### Method 2: Luxury QR Code & Camera Scanner
+1. On Device 1 (e.g. Phone), tap the **QR Code** icon in the header to display your personalized luxury QR badge.
+2. On Device 2 (e.g. Laptop or second Phone), tap **Scan QR** or the camera icon.
+3. Point your camera at the screen: xChat's in-app video viewfinder instantly decodes the invitation URI (`xchat://invite/<username>?addr=...&fp=...&sock=...`) and connects immediately!
+
+#### Method 3: Smart Connect Bar
+1. Tap the pastel **`+`** button or use the search bar.
+2. Paste an `xchat://invite/...` link, type an `@username`, or enter a direct `IP:Port` socket.
+3. Tap **Connect & Add** to start chatting with instant end-to-end encryption.
+
+#### Real-Time Chat & Audio Tones:
+- Send text, emojis, or simulated voice tone waveforms.
+- Incoming messages play rich Web Audio synthesized chimes and trigger Android haptic pulses.
+- Every message advances the Double Ratchet key ratchet for forward secrecy and post-compromise security.
+
+---
+
+### Step 1: Generate Your Cryptographic Identity
+Run the key generation tool:
+```bash
+xchat keygen
+```
+
+Output:
+```text
+=======================================================
+   xChat Cryptographic Identity Key Generation
+=======================================================
+Device Address:       xchat_b770179928483d97
+Identity Fingerprint: b770179928483d97fff0871acb785264f93a7a0730cadd99d6d239777a7a9f52
+Ed25519 Sign Pubkey:  b770179928483d97fff0871acb785264f93a7a0730cadd99d6d239777a7a9f52
+X25519 DH Pubkey:     fb7e38b246bbbe345c94ea7fe3671d5bd2dc79d4a5d49af10be13f5003c87d1a
+Signed Prekey:        5fea0c4c6c2c18b8d4bfef70597ca0602b370ae4f57232f6649808e7815cc71d
+Active One-Time Keys: 10
+```
+
+- **Device Address (`xchat_<hex>`):** Share this address with your contacts (like an anonymous username).
+- **Identity Fingerprint:** Compare this fingerprint (via QR code or verbal confirmation) to verify authenticity and prevent man-in-the-middle attacks.
+
+---
+
+### Step 2: Off-Grid Direct Communication (Without Internet)
+
+When no internet or cellular network exists, xChat devices connect directly over:
+1. **Bluetooth Low Energy (BLE):** Devices automatically pair and discover nearby peers using rotating discovery tokens.
+2. **Local Wi-Fi Direct / Portable Hotspot:** One device creates an offline mobile hotspot (no mobile data required). Both devices connect to the local IP subnet.
+
+Start the peer daemon:
+```bash
+xchat daemon --port 7001
+```
+
+---
+
+### Step 3: Run an Autonomous Blind Relay Node
+
+To extend network reach across an office, house, or neighborhood, any device (an old laptop, Raspberry Pi, or phone plugged into a charger) can run as a **Blind Relay**:
+
+```bash
+xchat daemon --port 7000 --relay
+```
+
+**What the Blind Relay does:**
+1. Collects encrypted envelopes from passing devices.
+2. Stores them safely in a store-and-forward queue on disk.
+3. Forwards them to recipients as soon as they appear in range.
+4. **Relay Blindness:** The relay operator **CANNOT read message text** or see user identities.
+
+---
+
+### Step 4: Test Everything Locally with the Multi-Node Simulator
+
+You can test the entire offline mesh, transport handover, and attack defense on any computer:
+```bash
+xchat simulate-mesh
+```
+
+---
+
+### Step 5: Broadcast an Emergency SOS Mesh Distress Beacon
+In disaster or off-grid emergency scenarios, broadcast a high-priority distress beacon to all nearby devices and relays:
+```bash
+xchat sos --message "Medical supplies required at coordinate site"
+```
+- Transmitted with maximum mesh forwarding priority.
+- Decodable by all community search-and-rescue nodes.
+
+---
+
+### Step 6: Join an Ephemeral RAM-Only Burner Room
+For temporary discussions that must leave zero trace on physical flash storage:
+```bash
+xchat burner --room tactical-alpha --pass secretpass123
+```
+- Messages exist in RAM only and automatically auto-expire.
+
+---
+
+### Step 7: Manage Saved Contacts & Ping Reachability
+Save friends' addresses and check if they are currently within direct radio range:
+```bash
+# Add contact
+xchat contact add Alice '<PREKEY_BUNDLE_JSON>'
+
+# List contacts
+xchat contact list
+
+# Ping peer over physical links
+xchat ping Alice
+```
+
+---
+
+## 4. Communication Distances & Expected Speeds
+
+### A. Direct Distance (Point-to-Point Without Intermediaries)
+
+How far can two people talk directly without needing any other users or relays?
+
+| Transport Mode | Indoor Range | Outdoor / Line-of-Sight | Notes |
+| :--- | :--- | :--- | :--- |
+| **Standard Bluetooth (BLE)** | 10 – 30 meters (through walls) | 50 – 100 meters | Standard on every phone and laptop. Low battery usage. |
+| **BLE Long Range (Coded PHY)** | 50 – 100 meters | 300 – 800 meters | Supported by Bluetooth 5.0+ hardware. Excellent outdoor range. |
+| **Local Wi-Fi / Hotspot** | 30 – 70 meters | 100 – 200+ meters | Uses phone hotspot or offline router. Very fast data rate. |
+| **Directional Wi-Fi Antennas** | N/A | 1 – 5 kilometers | Uses directional outdoor antennas pointed between rooftops. |
+| **LoRa Radio Extension (Optional)** | 1 – 3 kilometers (dense urban) | 5 – 15+ kilometers | Low-power sub-GHz radio module for extreme distance. |
+
+---
+
+### B. Distances Requiring Other Users (Multi-Hop Mesh & Store-and-Forward)
+
+When communicating across longer distances (e.g. across a neighborhood, university campus, or entire city), xChat relies on two mesh relay mechanisms:
+
+```text
+[Alice] ──(BLE 50m)──> [User B Relay] ──(BLE 50m)──> [User C Relay] ──(BLE 50m)──> [Bob]
+```
+
+1. **Active Real-Time Mesh Hopping:**
+   - Messages hop instantly from device to device across the area.
+   - 3 to 10 intermediary devices can bridge distances of **500 meters to 2+ kilometers** across a neighborhood.
+2. **Store-and-Forward / Sneakernet:**
+   - If no continuous physical path of devices exists, a relay user carries the encrypted envelope in their phone's local queue as they walk or drive.
+   - When they pass within range of Bob, the envelope is automatically and silently delivered.
+   - **Range:** Virtually unlimited (kilometers to across town), with delivery time dependent on physical movement.
+
+---
+
+### C. Expected Speeds & Latency
+
+| Physical Link | Data Speed (Throughput) | Delivery Latency | Best Used For |
+| :--- | :--- | :--- | :--- |
+| **Bluetooth Low Energy (BLE)** | 100 kbps – 1 Mbps | 20 – 100 ms (instant) | Text messages, cryptographic handshakes, emojis, location pins. Small photos take 1–3s. |
+| **Local Wi-Fi / Wi-Fi Direct** | 20 Mbps – 100+ Mbps | 1 – 5 ms (instant) | High-definition photos, voice messages, video clips, large documents. |
+| **LoRa Radio (Sub-GHz)** | 0.3 kbps – 5 kbps | 500 ms – 2 seconds | Short text messages and emergency coordinates only. |
+
+---
+
+## 5. Security & Operational Privacy Checklist (OPSEC)
+
+To maintain maximum privacy in high-threat environments:
+
+1. **Verify Identity Fingerprints in Person:** When adding a new trusted contact, compare their 64-character hex fingerprint or QR code to eliminate man-in-the-middle risks.
+2. **Turn Off Unneeded Broadcasts:** Use xChat's rotating discovery tokens so your device cannot be tracked by third-party Bluetooth scanners.
+3. **Set Message Expiration (TTL):** Standard envelopes expire after 24 hours (86,400s) and are automatically pruned from relays and local outboxes.
+4. **Crypto-Shredding:** When deleting local messages, xChat deletes the ratcheted message key, rendering stored ciphertext unrecoverable even if the raw storage is examined.
+
+---
+
+## 6. Real-Hardware Field-Testing: Two Separate Machines & Real Users
+
+xChat features dedicated live testing tools that test **two completely separate physical machines** (or two distinct isolated OS processes) running genuine random cryptographic identities—**zero dummy test users (no hardcoded Alice or Bob)**:
+
+### Option A: 1-Command Automated Two-Machine Network Test
+To test two distinct, fully autonomous machines communicating over real network sockets on any platform, run:
+
+```bash
+xchat test-two-nodes
+```
+
+This live test:
+1. Spawns **Machine 1** on port 9201 and **Machine 2** on port 9202 with isolated memory spaces.
+2. Generates genuine, random CSPRNG Ed25519/X25519 keypairs for both machines (e.g. `xchat_0dcc...` and `xchat_9a1c...`).
+3. Executes an asynchronous **X3DH initial key agreement** across real TCP sockets.
+4. Machine 1 encrypts and transmits Message #1 over the wire to Machine 2.
+5. Machine 2 accepts the network packet, authenticates the ChaCha20-Poly1305 AEAD tag, derives session keys, and decrypts the exact plaintext.
+6. Machine 2 transmits an authenticated reply over TCP back to Machine 1, advancing the **Diffie-Hellman Ratchet**.
+7. Machine 1 decrypts the reply and transmits Message #3, exercising symmetric chain ratcheting.
+8. Executes live adversarial tests: verifies that **packet replay attacks**, **ciphertext bit-flip tampering**, and **routing header tampering** are immediately rejected on the wire.
+
+### Option B: Testing Across Two Separate Physical Computers over LAN / Wi-Fi
+To test across two laptops, tablets, or phones on the same offline Wi-Fi network (or phone hotspot):
+
+**On Machine 2 (Receiver, IP e.g. `192.168.1.50`):**
+```bash
+xchat daemon --port 7000
+```
+Machine 2 prints its generated address and exports its public prekey bundle JSON.
+
+**On Machine 1 (Sender):**
+```bash
+xchat send \
+  --target 192.168.1.50:7000 \
+  --bundle '<PASTE_MACHINE_2_PREKEY_BUNDLE_JSON>' \
+  --message "Field intelligence: channel verified."
+```
+Machine 2 immediately receives, authenticates, and decrypts the message in real time with zero reliance on external servers!
+
+### Option C: Isolated Multi-Process Bash Test Script
+To run an automated two-machine test using two completely isolated directories (`/tmp/xchat_machine_alpha` and `/tmp/xchat_machine_beta`):
+```bash
+./scripts/test-two-machines.sh
+```
+
+---
+
+## 7. Field Playbook with Friends in Real-World Environments
+
+```text
+       ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
+       │ Alice Phone  │         │ Friend Relay │         │  Bob Phone   │
+       │  (Room 1)    │         │  (Hallway)   │         │  (Room 3)    │
+       └──────┬───────┘         └──────┬───────┘         └──────┬───────┘
+              │                        │                        │
+              │── Encrypted BLE Hop ──>│── Encrypted BLE Hop ──>│
+              │                        │                        │
+```
+
+### Pre-Flight Checklist
+1. **Turn OFF Mobile Data & Disconnect from Internet Wi-Fi** on all test devices.
+2. Ensure **Bluetooth** is enabled.
+3. On devices testing Wi-Fi Direct: turn on a local offline personal hotspot on one phone and have the others connect to it (zero cellular data required).
+
+---
+
+### Field Test 1: Direct Offline 1-on-1 Chat (Airplane Mode)
+- **Goal:** Verify end-to-end encryption works with zero internet.
+- **Steps:**
+  1. On **Phone A (Alice)**, run `xchat app` (or `xchat daemon --port 7001`).
+  2. On **Phone B (Bob)**, run `xchat app` (or `xchat daemon --port 7002`).
+  3. Alice exports her address/bundle (`xchat keygen` or click **Air-Gap QR** in the GUI).
+  4. Bob adds Alice: `xchat contact add Alice '<ALICE_BUNDLE_JSON>'` (or pastes it into the GUI).
+  5. Alice sends: `"Hello Bob, zero internet test!"`.
+  6. **Expected Result:** Bob receives and decrypts the message in <50ms. Inspecting network traffic shows only opaque AEAD ChaCha20-Poly1305 ciphertext.
+
+---
+
+### Field Test 2: Obstacle & Wall Penetration Test
+- **Goal:** Determine physical transmission limits through concrete/wood.
+- **Steps:**
+  1. Leave Phone A in a closed room.
+  2. Walk Phone B down the hall, through 1 wall (10m), 2 walls (20m), and outside (40m).
+  3. Send test messages at each interval.
+  4. Run `xchat ping Alice` at each distance.
+  5. **Expected Result:** Instant delivery through 1–2 walls; when too far, messages are held safely in Phone B's local outbox and dispatch the moment you step back in range.
+
+---
+
+### Field Test 3: 3-Person Blind Mesh Relay (No Direct Line of Sight)
+- **Goal:** Verify that a friend in the middle relays messages without reading them.
+- **Steps:**
+  1. Alice goes to **Room 1**.
+  2. Bob goes to **Room 3** (too far for Alice's phone to reach directly).
+  3. Friend C stands in the **Hallway (Room 2)** running a Blind Relay:
+     ```bash
+     xchat daemon --port 7000 --relay
+     ```
+  4. Alice sends a secret message to Bob.
+  5. **Expected Result:** 
+     - Friend C's relay screen shows: `[Relay] Received opaque envelope ID=... Hops=1`. Friend C **cannot** see text or names.
+     - Bob receives the envelope, hop count increments to 2, and Bob decrypts the plaintext successfully!
+
+---
+
+### Field Test 4: Asynchronous Store-and-Forward (Offline Recipient)
+- **Goal:** Verify that a recipient can receive messages sent while their device was powered off.
+- **Steps:**
+  1. Bob **turns off his phone** or closes xChat.
+  2. Alice sends: `"Meet me at the park at 6 PM"`.
+  3. The relay buffers the encrypted envelope in its local store-and-forward queue.
+  4. 10 minutes later, Bob powers on his phone and opens xChat.
+  5. **Expected Result:** The relay silently flushes the buffered envelope to Bob's device. Bob decrypts the message with zero message loss.
+
+---
+
+### Field Test 5: Emergency SOS Distress Broadcast
+- **Goal:** Test high-priority community search-and-rescue broadcasting.
+- **Steps:**
+  1. Alice clicks **🚨 Emergency SOS** in the GUI or runs:
+     ```bash
+     xchat sos --message "Lost on trail near north ridge"
+     ```
+  2. **Expected Result:** All devices (Bob, Friend C, nearby relays) immediately alert:
+     ```text
+     🚨 SOS DISTRESS BEACON from xchat_...
+     Location: 37.7749, -122.4194
+     Message: "Lost on trail near north ridge"
+     ```
+
+---
+
+### Field Test 6: Ephemeral Burner Room (Zero Flash Traces)
+- **Goal:** Verify RAM-only temporary chats.
+- **Steps:**
+  1. Alice and Bob run:
+     ```bash
+     xchat burner --room team-alpha --pass pass123
+     ```
+  2. Exchange tactical messages.
+  3. Wait for the 5-minute timeout.
+  4. **Expected Result:** Messages automatically vanish from RAM. Inspecting the device storage reveals zero traces.
+
+---
+
+## 7. Multi-Transport Carriers: Internet, Mobile Data, SMS, & Voice Audio Modem
+
+xChat strictly enforces that **cryptography sits above the transport layer**. This architecture allows xChat to seamlessly operate over any available medium—from offline radio mesh to cellular networks and public internet—while maintaining complete anonymity, forward secrecy, and unlinkability.
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│             xChat End-to-End Cryptographic Envelope        │
+│          (Ed25519 + X25519 + X3DH + Double Ratchet)         │
+├─────────────────────────────────────────────────────────────┤
+│         Chaumian Mixnet Buffer (Batching + Cover Traffic)   │
+├──────────────┬──────────────┬──────────────┬────────────────┤
+│ Internet/LTE │ Cellular SMS │ Voice Audio  │ Bluetooth Mesh │
+│ Mixnet Nodes │ GSM-Safe 140B│ Call Modem   │ & Local Wi-Fi  │
+└──────────────┴──────────────┴──────────────┴────────────────┘
+```
+
+### 1. Internet & Mobile Cellular Data (Chaumian Mixnet)
+When operating over cellular mobile data or the Internet, adversaries (ISPs, telcos, passive monitors) could observe packet timing and burst patterns. To defeat this:
+- Envelopes enter a **Chaumian Mix Pool buffer**.
+- Messages are collected into fixed-size batches (e.g. 4 envelopes).
+- If traffic is low, synthetic, indistinguishable **cover traffic envelopes** are automatically injected so batch sizes remain constant.
+- The batch is **cryptographically shuffled** to unlink ingress order from egress order.
+- Each packet is dispatched with a randomized **Poisson jitter delay** (20ms – 120ms).
+- **Run the Mixnet CLI simulation:**
+  ```bash
+  xchat mixnet --batch-size 4 --cover true
+  ```
+
+### 2. Cellular Telephony SMS Carrier (Zero Mobile Data / No Internet)
+When cellular data, Wi-Fi, and Bluetooth are unavailable, xChat can transmit envelopes directly over standard cellular SMS:
+- Opaque encrypted envelopes are chunked into 140-character GSM-safe multipart frames:
+  `XCHAT:v1:<msg_id>:<seq>/<total>:<hex_payload>`
+- Receiving devices reassemble chunks out-of-order and authenticate the envelope with ChaCha20-Poly1305.
+- Cellular carriers see only high-entropy random characters without phone numbers or identities bound to internal cryptographic addresses.
+- **Run the SMS carrier tool:**
+  ```bash
+  xchat sms --message "Confidential field intel over SMS carrier."
+  ```
+
+### 3. Voice Call & Airgap Acoustic Audio Modem
+When data networks and SMS are blocked or during an active voice phone call:
+- xChat modulates ciphertext into Audio Frequency Shift Keying (AFSK) tones in the standard telephone voice band (300 Hz – 3400 Hz):
+  - Mark Frequency: 1200 Hz (Binary 1)
+  - Space Frequency: 2200 Hz (Binary 0)
+  - Preamble Sync: 1700 Hz
+  - Sample Rate: 8000 Hz (Standard Telephone PCM)
+- Data can be played through the phone call speaker/microphone or across an airgap between devices.
+- **Run the Audio Modem tool:**
+  ```bash
+  xchat audio-modem --message "Secure acoustic voice modem transmission."
+  ```
+

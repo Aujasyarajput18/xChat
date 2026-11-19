@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use xchat_crypto::{
-    aead::{decrypt_aead, derive_nonce, encrypt_aead},
+    errors::CryptoError,
     identity::{IdentityKeyPair, IdentityPublicKey},
 };
 
@@ -11,11 +11,30 @@ use crate::{
 
 /// Public emergency destination token for SOS mesh packets.
 pub const EMERGENCY_BROADCAST_TOKEN: [u8; 16] = [0xff; 16];
-/// Dedicated symmetric emergency AEAD key for community search-and-rescue decoding.
-pub const EMERGENCY_AEAD_KEY: [u8; 32] = [
-    0xee, 0x50, 0x50, 0xee, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
-    0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
-];
+
+mod serde_sig {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8; 64], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(bytes)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 64], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let v = Vec::<u8>::deserialize(deserializer)?;
+        if v.len() != 64 {
+            return Err(serde::de::Error::custom("expected 64 bytes signature"));
+        }
+        let mut arr = [0u8; 64];
+        arr.copy_from_slice(&v);
+        Ok(arr)
+    }
+}
 
 /// Signed emergency distress beacon broadcasted over local radio mesh.
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
@@ -26,6 +45,8 @@ pub struct SosBeacon {
     pub latitude: f64,
     pub longitude: f64,
     pub emergency_message: String,
+    #[serde(with = "serde_sig")]
+    pub signature: [u8; 64],
 }
 
 impl SosBeacon {
@@ -42,7 +63,24 @@ impl SosBeacon {
     }
 }
 
-/// Create and sign a high-priority emergency distress beacon.
+fn beacon_signature_payload(
+    sender_pubkey: &IdentityPublicKey,
+    timestamp: u64,
+    latitude: f64,
+    longitude: f64,
+    message: &str,
+) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(b"xchat-sos-beacon-v1");
+    payload.extend_from_slice(&sender_pubkey.sign_pubkey);
+    payload.extend_from_slice(&timestamp.to_be_bytes());
+    payload.extend_from_slice(&latitude.to_bits().to_be_bytes());
+    payload.extend_from_slice(&longitude.to_bits().to_be_bytes());
+    payload.extend_from_slice(message.as_bytes());
+    payload
+}
+
+/// Create and sign a high-priority emergency distress beacon using the sender's Ed25519 identity key.
 pub fn create_emergency_beacon(
     identity: &IdentityKeyPair,
     latitude: f64,
@@ -51,33 +89,34 @@ pub fn create_emergency_beacon(
     now: u64,
     ttl_seconds: u64,
 ) -> Result<EncryptedEnvelope, CoreError> {
+    let sender_pubkey = identity.public_key();
+    let sig_payload = beacon_signature_payload(&sender_pubkey, now, latitude, longitude, message);
+    let signature = identity.sign(&sig_payload);
+
     let beacon = SosBeacon {
-        sender_address: identity.public_key().address(),
-        sender_pubkey: identity.public_key(),
+        sender_address: sender_pubkey.address(),
+        sender_pubkey,
         timestamp: now,
         latitude,
         longitude,
         emergency_message: message.to_string(),
+        signature,
     };
 
     let serialized =
         bincode::serialize(&beacon).map_err(|e| CoreError::Serialization(e.to_string()))?;
     let header = RoutingHeader::new(EMERGENCY_BROADCAST_TOKEN, now, ttl_seconds);
-    let aad = header.to_aad();
-
-    let nonce = derive_nonce(now, true);
-    let ciphertext =
-        encrypt_aead(&EMERGENCY_AEAD_KEY, &nonce, &serialized, &aad).map_err(CoreError::Crypto)?;
 
     Ok(EncryptedEnvelope {
         header,
         ratchet_header: None,
         x3dh_init: None,
-        ciphertext,
+        ciphertext: serialized,
     })
 }
 
-/// Decode and verify an inbound emergency distress beacon.
+/// Decode and cryptographically verify an inbound emergency distress beacon.
+/// Ensures the Ed25519 signature is authentic and matches the claimed sender identity.
 pub fn decode_emergency_beacon(
     envelope: &EncryptedEnvelope,
     now: u64,
@@ -95,12 +134,28 @@ pub fn decode_emergency_beacon(
         });
     }
 
-    let aad = envelope.header.to_aad();
-    let nonce = derive_nonce(envelope.header.created_at, true);
-    let decrypted = decrypt_aead(&EMERGENCY_AEAD_KEY, &nonce, &envelope.ciphertext, &aad)
+    let beacon: SosBeacon = bincode::deserialize(&envelope.ciphertext)
+        .map_err(|e| CoreError::Serialization(e.to_string()))?;
+
+    // Verify claimed address matches public key
+    if beacon.sender_address != beacon.sender_pubkey.address() {
+        return Err(CoreError::Crypto(CryptoError::InvalidSignature));
+    }
+
+    // Verify Ed25519 signature over all beacon parameters
+    let sig_payload = beacon_signature_payload(
+        &beacon.sender_pubkey,
+        beacon.timestamp,
+        beacon.latitude,
+        beacon.longitude,
+        &beacon.emergency_message,
+    );
+    beacon
+        .sender_pubkey
+        .verify(&sig_payload, &beacon.signature)
         .map_err(CoreError::Crypto)?;
 
-    bincode::deserialize(&decrypted).map_err(|e| CoreError::Serialization(e.to_string()))
+    Ok(beacon)
 }
 
 #[cfg(test)]
@@ -108,7 +163,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_emergency_sos_beacon_roundtrip() {
+    fn test_emergency_sos_beacon_roundtrip_and_signature_verification() {
         let identity = IdentityKeyPair::generate();
         let now = 1000;
         let env = create_emergency_beacon(
@@ -130,5 +185,46 @@ mod tests {
             decoded.emergency_message,
             "Earthquake survivor, need medical aid!"
         );
+    }
+
+    #[test]
+    fn test_forged_emergency_beacon_rejected() {
+        let alice = IdentityKeyPair::generate();
+        let eve = IdentityKeyPair::generate();
+        let now = 1000;
+
+        let env = create_emergency_beacon(
+            &alice,
+            37.7749,
+            -122.4194,
+            "Legitimate distress call",
+            now,
+            7200,
+        )
+        .expect("beacon created");
+
+        let mut beacon: SosBeacon = bincode::deserialize(&env.ciphertext).unwrap();
+        // Attacker tampers with coordinates or message
+        beacon.emergency_message = "Spoofed distress call".to_string();
+        let tampered_bytes = bincode::serialize(&beacon).unwrap();
+
+        let mut tampered_env = env.clone();
+        tampered_env.ciphertext = tampered_bytes;
+
+        let result = decode_emergency_beacon(&tampered_env, now + 5);
+        assert!(
+            result.is_err(),
+            "Tampered message must fail signature verification!"
+        );
+
+        // Attacker attempts identity substitution
+        let mut impersonated_beacon: SosBeacon = bincode::deserialize(&env.ciphertext).unwrap();
+        impersonated_beacon.sender_pubkey = eve.public_key();
+        let impersonated_bytes = bincode::serialize(&impersonated_beacon).unwrap();
+        let mut imp_env = env;
+        imp_env.ciphertext = impersonated_bytes;
+
+        let result2 = decode_emergency_beacon(&imp_env, now + 5);
+        assert!(result2.is_err(), "Impersonated key must fail validation!");
     }
 }

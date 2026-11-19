@@ -1,6 +1,8 @@
 /target
 /dist/
 /android/build/
+.gradle/
+local.properties
 *.keystore
 **/*.rs.bk
 .DS_Store

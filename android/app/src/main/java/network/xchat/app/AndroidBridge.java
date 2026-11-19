@@ -5,6 +5,7 @@ import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
@@ -14,6 +15,8 @@ import android.widget.Toast;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
 import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -24,6 +27,9 @@ import java.net.URL;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class AndroidBridge {
@@ -33,19 +39,305 @@ public class AndroidBridge {
     private int listenPort = 9400;
     private volatile boolean isServerRunning = false;
 
+    // Physical Bluetooth Low Energy Mesh
+    private BluetoothMeshManager bleManager;
+
+    // UDP Peer Discovery
+    private static final int DISCOVERY_PORT = 9444;
+    private DatagramSocket udpSocket;
+    private volatile boolean isDiscoveryRunning = false;
+    private WifiManager.MulticastLock multicastLock;
+    private final Map<String, DiscoveredPeerInfo> discoveredPeers = new ConcurrentHashMap<>();
+
+    private String myUsername = "";
+    private String myDisplayName = "";
+    private String myMeshAddress = "";
+    private String myFingerprint = "";
+
+    private static final String[] EMOJI_ALPHABET = {
+        "🪐", "🚀", "🛰️", "🛡️", "💎", "⚡", "🌊", "🔥", "🌲", "🌸", "🍀", "🦊", "🦅", "🦉",
+        "🐬", "🦋", "⚓", "🧭", "🔑", "🔒", "🔮", "🧬", "🌟", "🌕", "🌈", "🏔️", "☕", "🎯",
+        "🧩", "🕊️", "🦁", "👑"
+    };
+
+    private void initOrGenerateKeys(boolean forceNew) {
+        String existingSign = prefs.getString("sign_pubkey", "");
+        String existingDh = prefs.getString("dh_pubkey", "");
+        if (!forceNew && existingSign.length() == 64 && existingDh.length() == 64) {
+            this.myMeshAddress = prefs.getString("my_address", "xchat_" + existingSign.substring(0, 16));
+            this.myFingerprint = prefs.getString("fingerprint", existingSign);
+            return;
+        }
+
+        java.security.SecureRandom rng = new java.security.SecureRandom();
+        byte[] signSeed = new byte[32];
+        rng.nextBytes(signSeed);
+        byte[] dhSecret = new byte[32];
+        rng.nextBytes(dhSecret);
+
+        byte[] signPub;
+        byte[] dhPub;
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            signPub = md.digest(signSeed);
+            md.reset();
+            dhPub = md.digest(dhSecret);
+        } catch (Exception e) {
+            signPub = signSeed;
+            dhPub = dhSecret;
+        }
+
+        StringBuilder signHex = new StringBuilder();
+        for (byte b : signPub) signHex.append(String.format("%02x", b));
+        String signPubStr = signHex.toString();
+
+        StringBuilder dhHex = new StringBuilder();
+        for (byte b : dhPub) dhHex.append(String.format("%02x", b));
+        String dhPubStr = dhHex.toString();
+
+        String addr = "xchat_" + signPubStr.substring(0, 16);
+        String fp = signPubStr;
+
+        StringBuilder visual = new StringBuilder();
+        for (int i = 0; i < 6; i++) {
+            int idx = ((signPub[i] & 0xFF) ^ (signPub[i + 6] & 0xFF)) % EMOJI_ALPHABET.length;
+            visual.append(EMOJI_ALPHABET[idx]);
+        }
+
+        this.myMeshAddress = addr;
+        this.myFingerprint = fp;
+
+        prefs.edit()
+            .putString("sign_pubkey", signPubStr)
+            .putString("dh_pubkey", dhPubStr)
+            .putString("my_address", addr)
+            .putString("fingerprint", fp)
+            .putString("visual_fingerprint", visual.toString())
+            .apply();
+    }
+
+    public static class DiscoveredPeerInfo {
+        public String username;
+        public String displayName;
+        public String address;
+        public String fingerprint;
+        public String ip;
+        public int port;
+        public long lastSeen;
+        public String transport = "wifi";
+        public int rssi = 0;
+
+        public JSONObject toJson() {
+            try {
+                JSONObject obj = new JSONObject();
+                obj.put("username", username);
+                obj.put("display_name", displayName);
+                obj.put("address", address);
+                obj.put("fingerprint", fingerprint);
+                obj.put("ip", ip);
+                obj.put("port", port);
+                obj.put("transport", transport);
+                obj.put("rssi", rssi);
+                obj.put("last_seen", lastSeen);
+                return obj;
+            } catch (Exception e) {
+                return new JSONObject();
+            }
+        }
+    }
+
     public AndroidBridge(MainActivity activity) {
         this.activity = activity;
         this.prefs = activity.getSharedPreferences("xchat_prefs", Context.MODE_PRIVATE);
+        this.myUsername = prefs.getString("username", "");
+        if (this.myUsername == null || this.myUsername.trim().isEmpty()) {
+            this.myUsername = "@user_" + (new java.security.SecureRandom().nextInt(90000) + 10000);
+            prefs.edit().putString("username", this.myUsername).apply();
+        }
+        this.myDisplayName = prefs.getString("display_name", "Android Node");
+        initOrGenerateKeys(false);
+
         startReceiverServer();
+        startDiscoveryEngine();
+        bleManager = new BluetoothMeshManager(activity, this);
     }
 
     public void cleanup() {
         isServerRunning = false;
+        isDiscoveryRunning = false;
+        if (bleManager != null) {
+            try {
+                bleManager.cleanup();
+            } catch (Exception ignored) {}
+        }
         if (serverSocket != null) {
             try {
                 serverSocket.close();
             } catch (Exception ignored) {}
         }
+        if (udpSocket != null) {
+            try {
+                udpSocket.close();
+            } catch (Exception ignored) {}
+        }
+        if (multicastLock != null && multicastLock.isHeld()) {
+            try {
+                multicastLock.release();
+            } catch (Exception ignored) {}
+        }
+    }
+
+    private void startDiscoveryEngine() {
+        try {
+            WifiManager wm = (WifiManager) activity.getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                multicastLock = wm.createMulticastLock("xchat_discovery_lock");
+                multicastLock.setReferenceCounted(true);
+                multicastLock.acquire();
+            }
+        } catch (Exception ignored) {}
+
+        isDiscoveryRunning = true;
+
+        // UDP Receiver Thread
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    try {
+                        udpSocket = new DatagramSocket(DISCOVERY_PORT);
+                    } catch (Exception portTaken) {
+                        udpSocket = new DatagramSocket(0);
+                    }
+                    udpSocket.setBroadcast(true);
+
+                    byte[] buffer = new byte[2048];
+                    while (isDiscoveryRunning && !udpSocket.isClosed()) {
+                        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                        udpSocket.receive(packet);
+                        String raw = new String(packet.getData(), 0, packet.getLength(), "UTF-8");
+                        handleDiscoveryPacket(raw, packet.getAddress().getHostAddress());
+                    }
+                } catch (Exception ignored) {}
+            }
+        }).start();
+
+        // Periodic UDP Beacon Broadcast Thread
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (isDiscoveryRunning) {
+                    try {
+                        broadcastBeacon();
+                        Thread.sleep(4000);
+                    } catch (Exception ignored) {}
+                }
+            }
+        }).start();
+    }
+
+    private void handleDiscoveryPacket(String jsonStr, String senderIp) {
+        try {
+            JSONObject obj = new JSONObject(jsonStr);
+            String u = obj.optString("username", "");
+            String addr = obj.optString("address", "");
+            if (addr.equals(myMeshAddress)) {
+                return; // Ignore self broadcast
+            }
+            DiscoveredPeerInfo peer = new DiscoveredPeerInfo();
+            peer.username = u;
+            peer.displayName = obj.optString("display_name", u);
+            peer.address = addr;
+            peer.fingerprint = obj.optString("fingerprint", "");
+            peer.port = obj.optInt("port", 9400);
+            peer.ip = senderIp;
+            peer.lastSeen = System.currentTimeMillis();
+
+            discoveredPeers.put(addr, peer);
+
+            // Notify WebView
+            activity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        String js = "if (window.onNearbyPeersUpdated) { window.onNearbyPeersUpdated(); }";
+                        activity.getWebView().evaluateJavascript(js, null);
+                    } catch (Exception ignored) {}
+                }
+            });
+        } catch (Exception ignored) {}
+    }
+
+    private void broadcastBeacon() {
+        if (udpSocket == null || udpSocket.isClosed()) return;
+        try {
+            JSONObject obj = new JSONObject();
+            obj.put("username", myUsername.startsWith("@") ? myUsername : "@" + myUsername);
+            obj.put("display_name", myDisplayName);
+            obj.put("address", myMeshAddress);
+            obj.put("fingerprint", myFingerprint);
+            obj.put("port", listenPort);
+            obj.put("timestamp", System.currentTimeMillis() / 1000);
+
+            byte[] bytes = obj.toString().getBytes("UTF-8");
+            DatagramPacket packet = new DatagramPacket(
+                bytes,
+                bytes.length,
+                InetAddress.getByName("255.255.255.255"),
+                DISCOVERY_PORT
+            );
+            udpSocket.send(packet);
+        } catch (Exception ignored) {}
+    }
+
+    @JavascriptInterface
+    public void updateDiscoveryProfile(String username, String displayName, String address, String fingerprint) {
+        this.myUsername = username != null ? username : "";
+        this.myDisplayName = displayName != null ? displayName : "";
+        this.myMeshAddress = address != null ? address : "";
+        this.myFingerprint = fingerprint != null ? fingerprint : "";
+
+        prefs.edit()
+            .putString("username", this.myUsername)
+            .putString("display_name", this.myDisplayName)
+            .putString("my_address", this.myMeshAddress)
+            .putString("fingerprint", this.myFingerprint)
+            .apply();
+
+        // Trigger immediate beacon broadcast
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                broadcastBeacon();
+            }
+        }).start();
+    }
+
+    @JavascriptInterface
+    public String getDiscoveredPeers() {
+        JSONArray arr = new JSONArray();
+        long now = System.currentTimeMillis();
+        for (DiscoveredPeerInfo peer : discoveredPeers.values()) {
+            // Expire peers after 60s
+            if (now - peer.lastSeen < 60000) {
+                arr.put(peer.toJson());
+            }
+        }
+        return arr.toString();
+    }
+
+    @JavascriptInterface
+    public String resolveUsername(String username) {
+        if (username == null) return "{}";
+        String clean = username.trim();
+        if (!clean.startsWith("@")) clean = "@" + clean;
+        long now = System.currentTimeMillis();
+        for (DiscoveredPeerInfo peer : discoveredPeers.values()) {
+            if (now - peer.lastSeen < 60000 && peer.username.equalsIgnoreCase(clean)) {
+                return peer.toJson().toString();
+            }
+        }
+        return "{}";
     }
 
     private void startReceiverServer() {
@@ -90,20 +382,32 @@ public class AndroidBridge {
             int contentLength = 0;
             while ((line = reader.readLine()) != null && !line.isEmpty()) {
                 if (line.toLowerCase().startsWith("content-length:")) {
-                    contentLength = Integer.parseInt(line.substring(15).trim());
+                    try {
+                        contentLength = Integer.parseInt(line.substring(15).trim());
+                    } catch (NumberFormatException ignored) {
+                        contentLength = 0;
+                    }
                 }
+            }
+
+            // Cap maximum payload at 1 MB to eliminate memory exhaustion DoS
+            final int MAX_BODY_SIZE = 1024 * 1024;
+            if (contentLength < 0 || contentLength > MAX_BODY_SIZE) {
+                socket.close();
+                return;
             }
 
             StringBuilder bodyBuilder = new StringBuilder();
             if (contentLength > 0) {
-                char[] buf = new char[contentLength];
-                int read = 0;
-                while (read < contentLength) {
-                    int r = reader.read(buf, read, contentLength - read);
+                char[] chunk = new char[Math.min(contentLength, 4096)];
+                int totalRead = 0;
+                while (totalRead < contentLength) {
+                    int toRead = Math.min(chunk.length, contentLength - totalRead);
+                    int r = reader.read(chunk, 0, toRead);
                     if (r == -1) break;
-                    read += r;
+                    bodyBuilder.append(chunk, 0, r);
+                    totalRead += r;
                 }
-                bodyBuilder.append(buf, 0, read);
             }
             final String body = bodyBuilder.toString();
 
@@ -112,9 +416,22 @@ public class AndroidBridge {
                 String resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\nContent-Length: 0\r\n\r\n";
                 os.write(resp.getBytes("UTF-8"));
             } else if (path.startsWith("/api/identity")) {
-                String myAddr = prefs.getString("my_address", "xchat_android");
-                String respBody = "{\"address\":\"" + myAddr + "\",\"alias\":\"Android Node\",\"ip\":\"" + getLocalIpAddress() + "\",\"port\":" + listenPort + ",\"status\":\"online\"}";
+                String myAddr = prefs.getString("my_address", myMeshAddress);
+                String signPub = prefs.getString("sign_pubkey", "");
+                String dhPub = prefs.getString("dh_pubkey", "");
+                String vFp = prefs.getString("visual_fingerprint", "");
+                String respBody = "{\"address\":\"" + myAddr + "\",\"username\":\"" + myUsername + "\",\"display_name\":\"" + myDisplayName + "\",\"fingerprint\":\"" + myFingerprint + "\",\"sign_pubkey\":\"" + signPub + "\",\"dh_pubkey\":\"" + dhPub + "\",\"visual_fingerprint\":\"" + vFp + "\",\"ip\":\"" + getLocalIpAddress() + "\",\"port\":" + listenPort + ",\"status\":\"online\"}";
                 String resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + respBody.getBytes("UTF-8").length + "\r\n\r\n" + respBody;
+                os.write(resp.getBytes("UTF-8"));
+            } else if (path.startsWith("/api/keygen")) {
+                String keygenResult = generateNewKeys();
+                String resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + keygenResult.getBytes("UTF-8").length + "\r\n\r\n" + keygenResult;
+                os.write(resp.getBytes("UTF-8"));
+            } else if (path.startsWith("/api/bundle") || path.startsWith("/api/prekey")) {
+                String signPub = prefs.getString("sign_pubkey", "");
+                String dhPub = prefs.getString("dh_pubkey", "");
+                String bundleJson = "{\"identity_key\":{\"sign_pubkey\":\"" + signPub + "\",\"dh_pubkey\":\"" + dhPub + "\"},\"signed_prekey\":\"" + dhPub + "\",\"signed_prekey_signature\":\"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\",\"one_time_prekeys\":[]}";
+                String resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: " + bundleJson.getBytes("UTF-8").length + "\r\n\r\n" + bundleJson;
                 os.write(resp.getBytes("UTF-8"));
             } else if (path.startsWith("/api/receive")) {
                 if (!body.isEmpty()) {
@@ -171,6 +488,94 @@ public class AndroidBridge {
     @JavascriptInterface
     public int getListenPort() {
         return listenPort;
+    }
+
+    @JavascriptInterface
+    public void sendBleEnvelope(final String targetMac, final String jsonPayload, final String callbackId) {
+        if (bleManager == null || !bleManager.isSupported()) {
+            activity.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    String js = "if(window.onSendCallback) window.onSendCallback(" + JSONObject.quote(callbackId) + ", false);";
+                    activity.getWebView().evaluateJavascript(js, null);
+                }
+            });
+            return;
+        }
+
+        bleManager.sendEnvelope(targetMac, jsonPayload, new BluetoothMeshManager.BleSendCallback() {
+            @Override
+            public void onResult(final boolean success, final String error) {
+                activity.runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        String js = "if(window.onSendCallback) window.onSendCallback(" + JSONObject.quote(callbackId) + ", " + success + ");";
+                        activity.getWebView().evaluateJavascript(js, null);
+                    }
+                });
+            }
+        });
+    }
+
+    public void onBlePeerDiscovered(BluetoothMeshManager.DiscoveredBleNode node) {
+        DiscoveredPeerInfo peer = new DiscoveredPeerInfo();
+        peer.username = (node.username != null && !node.username.isEmpty()) ? node.username : "@ble_" + node.macAddress.replace(":", "").substring(6);
+        peer.displayName = (node.deviceName != null && !node.deviceName.isEmpty()) ? node.deviceName : "BLE Peer (" + node.macAddress + ")";
+        peer.address = "ble:" + node.macAddress;
+        peer.fingerprint = "ble:" + node.macAddress;
+        peer.ip = "ble:" + node.macAddress;
+        peer.port = 0;
+        peer.transport = "ble";
+        peer.rssi = node.rssi;
+        peer.lastSeen = node.lastSeen;
+
+        discoveredPeers.put(peer.address, peer);
+
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String js = "if (window.onNearbyPeersUpdated) { window.onNearbyPeersUpdated(); }";
+                    activity.getWebView().evaluateJavascript(js, null);
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    public void handleInboundBleEnvelope(final String payload, final String senderMac) {
+        activity.runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                vibrate(30);
+                try {
+                    String js = "if (window.onIncomingNetworkMessage) { window.onIncomingNetworkMessage(" + JSONObject.quote(payload) + "); }";
+                    activity.getWebView().evaluateJavascript(js, null);
+                } catch (Exception ignored) {}
+            }
+        });
+    }
+
+    @JavascriptInterface
+    public boolean isBleSupported() {
+        return bleManager != null && bleManager.isSupported();
+    }
+
+    @JavascriptInterface
+    public boolean isBleAdvertising() {
+        return bleManager != null && bleManager.isAdvertising();
+    }
+
+    @JavascriptInterface
+    public boolean isBleScanning() {
+        return bleManager != null && bleManager.isScanning();
+    }
+
+    @JavascriptInterface
+    public void restartBleMesh() {
+        if (bleManager != null) {
+            bleManager.cleanup();
+            bleManager = new BluetoothMeshManager(activity, this);
+        }
     }
 
     @JavascriptInterface
@@ -354,6 +759,58 @@ public class AndroidBridge {
     }
 
     @JavascriptInterface
+    public String getUsername() {
+        return this.myUsername;
+    }
+
+    @JavascriptInterface
+    public String getDisplayName() {
+        return this.myDisplayName;
+    }
+
+    @JavascriptInterface
+    public String getMeshAddress() {
+        return this.myMeshAddress;
+    }
+
+    @JavascriptInterface
+    public String getFingerprint() {
+        return this.myFingerprint;
+    }
+
+    @JavascriptInterface
+    public String generateNewKeys() {
+        initOrGenerateKeys(true);
+        try {
+            JSONObject res = new JSONObject();
+            res.put("status", "generated");
+            res.put("address", this.myMeshAddress);
+            res.put("fingerprint", this.myFingerprint);
+            res.put("visual_fingerprint", prefs.getString("visual_fingerprint", ""));
+            res.put("sign_pubkey", prefs.getString("sign_pubkey", ""));
+            res.put("dh_pubkey", prefs.getString("dh_pubkey", ""));
+            return res.toString();
+        } catch (Exception e) {
+            return "{\"status\":\"error\",\"message\":\"" + e.getMessage() + "\"}";
+        }
+    }
+
+    @JavascriptInterface
+    public String getSignPubkey() {
+        return prefs.getString("sign_pubkey", "");
+    }
+
+    @JavascriptInterface
+    public String getDhPubkey() {
+        return prefs.getString("dh_pubkey", "");
+    }
+
+    @JavascriptInterface
+    public String getVisualFingerprint() {
+        return prefs.getString("visual_fingerprint", "");
+    }
+
+    @JavascriptInterface
     public String getDeviceInfo() {
         return "{\"model\":\"" + Build.MANUFACTURER + " " + Build.MODEL + "\",\"android\":\"" + Build.VERSION.RELEASE + "\"}";
     }
@@ -363,3 +820,4 @@ public class AndroidBridge {
         return true;
     }
 }
+

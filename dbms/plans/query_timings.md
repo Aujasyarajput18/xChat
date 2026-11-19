@@ -4,7 +4,7 @@
 **Module:** DBMS Physical Performance & Query Timings Analysis  
 **Author:** Aryan Singh Damara  
 **Course:** Advanced Programming / Database Management Systems  
-**Evaluation Target:** CP4 (`dbms/query_timings.md` / `dbms/querry_timings.md`)  
+**Evaluation Target:** CP4 (`dbms/05_query_timings.md`, `dbms/05_optimization.md` & `dbms/plans/`)  
 **Prerequisites:** CP1 (`01_normalization.md`) · CP2 (`02_er_diagram.md` + `03_schema.sql`) · CP3 (`04_queries.sql` + `04_queries.md`) · CP4 (`05_optimization.md`)  
 **Date:** November 2026  
 

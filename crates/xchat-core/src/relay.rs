@@ -6,6 +6,7 @@ use crate::{
 };
 
 pub const MAX_RELAY_STORE_SIZE: usize = 5000;
+pub const MAX_HOPS: u8 = 16;
 
 /// Relay node facilitating store-and-forward routing between asynchronous/offline peers.
 /// Completely BLIND to message plaintext, sender identity, and conversation graph.
@@ -41,6 +42,13 @@ impl RelayNode {
             if self.total_stored >= MAX_RELAY_STORE_SIZE {
                 return Err(CoreError::RoutingError("Relay capacity exceeded".into()));
             }
+        }
+
+        if envelope.header.hop_count >= MAX_HOPS {
+            return Err(CoreError::RoutingError(format!(
+                "Envelope exceeded maximum hop count ({})",
+                MAX_HOPS
+            )));
         }
 
         envelope.increment_hop();
@@ -105,5 +113,21 @@ mod tests {
         assert_eq!(fetched.len(), 1);
         assert_eq!(fetched[0].header.hop_count, 1);
         assert_eq!(relay.total_stored(), 0);
+    }
+
+    #[test]
+    fn test_relay_max_hops_enforced() {
+        let mut relay = RelayNode::new();
+        let mut header = RoutingHeader::new([0x55; 16], 1000, 3600);
+        header.hop_count = MAX_HOPS;
+        let env = EncryptedEnvelope {
+            header,
+            ratchet_header: None,
+            x3dh_init: None,
+            ciphertext: vec![1, 2, 3],
+        };
+
+        let result = relay.forward_envelope(env, 1005);
+        assert!(result.is_err());
     }
 }

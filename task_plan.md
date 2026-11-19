@@ -71,3 +71,54 @@ Build, test, verify, and document a production-grade, full-fledged implementatio
 - [x] Embedded Lightweight App GUI (`crates/xchat-cli/src/gui.rs`) with embedded HTML/CSS/JS frontend
 - [x] CLI integration: `xchat app`, `xchat gui`, `xchat sos`, `xchat burner`
 - [x] Verification, testing (all 30 tests passed), and release build repackaging
+
+### Phase 9: High-End UX/UI Redesign & Collaborator Commit Integration
+- [x] Pull and cleanly integrate 26 collaborator commits from `origin/main`
+- [x] Harmonize CashPilot Obsidian Noir aesthetic with Sage Mint and Pastel Lavender
+- [x] Implement real-time contact & message full-text search with `@username` support
+- [x] Enhance squircle micro-interactions, cubic-bezier hover transitions, and active glows
+- [x] Add customizable user profiles with avatar color swatches and bio persistence
+
+### Phase 10: Serverless Username (`@handle`) Architecture & Zero-Config Mesh Radar
+- [x] Implement `UserProfile` model and `@username` validation in `xchat-core`
+- [x] Add zero-config UDP discovery engine (`PeerDiscoveryEngine`) on port 9444 in `xchat-transport`
+- [x] Implement Nearby Mesh Radar horizontal carousel for 1-tap peer connection
+- [x] Luxury Designer QR code matrix with pastel gradient, central glowing shield emblem, and camera scanner
+- [x] Visual Safety Verification using 6-symbol emoji fingerprint blocks
+- [x] Multi-node automated verification test suite (`scripts/test-username-discovery.sh`)
+- [x] Release packaging automation and GitHub release asset upload (v0.1.0)
+
+### Phase 11: Real Physical Bluetooth Low Energy (BLE) Mesh & P2P Transport (Zero Simulation)
+- [x] Implement Rust BLE Packetization, MTU Chunking & Reassembly Protocol (`crates/xchat-transport/src/ble.rs`)
+- [x] Add unit & stress tests for BLE MTU fragmentation (20B to 512B MTUs) with out-of-order reassembly
+- [x] Implement native Android `BluetoothMeshManager.java`:
+  - `BluetoothLeAdvertiser`: Real physical advertising of xChat 128-bit Service UUID & Identity Service Data
+  - `BluetoothLeScanner`: Real low-latency hardware scanning for nearby mesh nodes with RSSI tracking
+  - `BluetoothGattServer`: Real incoming GATT server with RX/TX/INFO characteristics and chunk reassembly
+  - `BluetoothGatt` Client: Outbound GATT connection pool, MTU 512 negotiation, sequential chunk dispatch
+- [x] Integrate `BluetoothMeshManager` into `AndroidBridge.java`:
+  - Lifecycle initialization, Bluetooth permission checks, graceful degradation
+  - Inbound BLE envelope dispatch into WebView via `onIncomingNetworkMessage`
+  - JavaScript interfaces: `sendBleEnvelope()`, `isBleSupported()`, `isBleAdvertising()`, `isBleScanning()`, `restartBleMesh()`
+- [x] Update UI (`index.html`):
+  - Support `ble:XX:XX:XX:XX:XX:XX` peer targets
+  - Nearby Radar shows BLE Bluetooth signal indicator vs Wi-Fi
+  - Message dispatch automatically routes via `window.AndroidBridge.sendBleEnvelope` for BLE peers
+- [x] Verify Rust tests (`cargo test --workspace`) (All 65 tests passed)
+- [x] Rebuild, align, and sign Android APK (`dist/xchat-v0.1.0.apk` & `dist/xchat.apk`)
+- [x] Commit and push to `origin/main` and `backup/main`
+
+### Phase 12: macOS & Desktop Physical Bluetooth Low Energy (CoreBluetooth) Integration
+- [x] Integrate `btleplug` v0.13.5 with native Apple `CoreBluetooth` framework bindings
+- [x] Implement `BleCentralTransport` in `crates/xchat-transport/src/ble_central.rs`:
+  - Background scanning for `BLE_SERVICE_UUID` (`a495ff10-c5b1-4b44-b512-1370f02d74de`)
+  - Auto-discovery and connection to physical Android GATT servers
+  - Subscription to `BLE_TX_CHAR_UUID` (`a495ff12-...`) for inbound notifications
+  - Sequential chunked writing to `BLE_RX_CHAR_UUID` (`a495ff11-...`) via `BleChunker`
+  - Inbound reassembly via `BleReassembler` with UTF-8 / JSON deserialization
+- [x] Wire `BleCentralTransport` into desktop GUI (`crates/xchat-cli/src/gui.rs`):
+  - Discover BLE peers on Nearby Radar alongside UDP Wi-Fi peers
+  - Direct transmission over BLE for `ble:` targets
+  - Real-time inbound BLE dispatch into chat histories
+- [x] Verify workspace tests (all 65 passed) and live cross-device verification
+- [x] Rebuild signed Android APK and push to `origin/main` & `backup/main`

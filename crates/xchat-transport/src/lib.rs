@@ -3,6 +3,9 @@
 //! and multi-transport failover/routing manager.
 
 pub mod audio_modem;
+pub mod ble;
+pub mod ble_central;
+pub mod discovery;
 pub mod errors;
 pub mod manager;
 pub mod mesh_sim;
@@ -12,6 +15,12 @@ pub mod tcp;
 pub mod traits;
 
 pub use audio_modem::AudioCallModem;
+pub use ble::{BleChunker, BleFrameHeader, BleReassembler, DEFAULT_BLE_MTU};
+pub use ble_central::{
+    BleCentralTransport, DiscoveredBleDevice, BLE_INFO_CHAR_UUID, BLE_RX_CHAR_UUID,
+    BLE_SERVICE_UUID, BLE_TX_CHAR_UUID,
+};
+pub use discovery::{DiscoveryBeacon, PeerDiscoveryEngine, DEFAULT_DISCOVERY_PORT};
 pub use errors::TransportError;
 pub use mixnet_transport::MixnetTransport;
 pub use sms::SmsCarrier;

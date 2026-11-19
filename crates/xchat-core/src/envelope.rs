@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use xchat_crypto::{double_ratchet::RatchetHeader, x3dh::X3dhInitMessage};
 
@@ -10,11 +10,10 @@ pub const DEFAULT_TTL_SECONDS: u64 = 86400; // 24 hours
 pub type MessageId = [u8; 16];
 pub type RouteToken = [u8; 16];
 
-/// Generate a cryptographically random 128-bit Message ID.
+/// Generate a cryptographically secure random 128-bit Message ID using OS entropy.
 pub fn generate_message_id() -> MessageId {
-    let mut rng = rand::thread_rng();
     let mut id = [0u8; 16];
-    rng.fill(&mut id);
+    OsRng.fill_bytes(&mut id);
     id
 }
 

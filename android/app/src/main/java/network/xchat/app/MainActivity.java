@@ -51,6 +51,8 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setLoadsImagesAutomatically(true);
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
@@ -74,12 +76,69 @@ public class MainActivity extends Activity {
             public boolean onConsoleMessage(ConsoleMessage consoleMessage) {
                 return true;
             }
+
+            @Override
+            public void onPermissionRequest(final android.webkit.PermissionRequest request) {
+                request.grant(request.getResources());
+            }
+
+            @Override
+            public boolean onJsAlert(WebView view, String url, String message, final android.webkit.JsResult result) {
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                    .setTitle("xChat")
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dialog, int which) {
+                            result.confirm();
+                        }
+                    })
+                    .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(android.content.DialogInterface dialog) {
+                            result.cancel();
+                        }
+                    })
+                    .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsConfirm(WebView view, String url, String message, final android.webkit.JsResult result) {
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                    .setTitle("xChat")
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok, new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dialog, int which) {
+                            result.confirm();
+                        }
+                    })
+                    .setNegativeButton(android.R.string.cancel, new android.content.DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(android.content.DialogInterface dialog, int which) {
+                            result.cancel();
+                        }
+                    })
+                    .setOnCancelListener(new android.content.DialogInterface.OnCancelListener() {
+                        @Override
+                        public void onCancel(android.content.DialogInterface dialog) {
+                            result.cancel();
+                        }
+                    })
+                    .show();
+                return true;
+            }
         });
     }
 
     private void checkAndRequestPermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             List<String> neededPermissions = new ArrayList<>();
+
+            if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+                neededPermissions.add(Manifest.permission.CAMERA);
+            }
 
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 neededPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
@@ -100,6 +159,24 @@ public class MainActivity extends Activity {
             if (!neededPermissions.isEmpty()) {
                 requestPermissions(neededPermissions.toArray(new String[0]), PERMISSION_REQ_CODE);
             }
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == PERMISSION_REQ_CODE) {
+            if (bridge != null) {
+                bridge.restartBleMesh();
+            }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (bridge != null) {
+            bridge.restartBleMesh();
         }
     }
 

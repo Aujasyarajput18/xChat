@@ -119,37 +119,45 @@ xchat app
 ```
 *(or `xchat gui`)*
 
-This boots your local encrypted node and automatically opens a responsive, **Telegram-inspired dark-mode graphical user interface** in your default browser at `http://localhost:8080` (or accessible over LAN at `http://<your-ip>:8080`).
+This boots your local encrypted node and automatically opens a responsive, **Obsidian Noir graphical user interface with Pastel accents** in your default browser at `http://localhost:8080` (or accessible over LAN at `http://<your-ip>:8080`).
 
-#### 🎨 Telegram-Styled User Interface
-- **Signature Telegram Theme:** Dark canvas (`#0e1621`), sidebar & top header (`#17212b`), and signature Telegram blue (`#5288c1`).
-- **Dynamic Colored Avatars:** Contact initials are automatically rendered in vibrant Telegram avatar colors (blue, green, orange, purple, red, teal).
-- **Floating Action Button (FAB):** Telegram-style circular blue `+` button in the bottom right corner of the chat list for 1-tap peer addition.
-- **Message Bubbles & Read Receipts:** Incoming dark bubbles (`#182533`) and outgoing Telegram blue bubbles (`#2b5278`) with timestamps and blue double checkmarks (`✓✓`).
-- **Reachable Address Pill:** Prominently displays your local reachable socket address (e.g., `192.168.1.15:8080` on PC or `192.168.1.45:9400` on Android) for 1-tap clipboard copy and sharing.
+#### 🎨 CashPilot Obsidian Noir Design Language
+- **Pitch-Black Canvas (`#000000` / `#0a0a0a`):** True OLED pitch black designed for maximum power efficiency and high-end visual elegance.
+- **Pastel Lavender (`#d4c4fb`) & Sage Mint (`#bbf49b`):** High-contrast pastel highlights for buttons, badges, active squircle borders, and subtle glows.
+- **Seamless Usernames (`@handle`):** Replace raw cryptic IP addresses with human-readable usernames while preserving strict cryptographic identity guarantees.
+- **Nearby Mesh Radar Carousel:** Live horizontal radar strip showing automatically discovered local Wi-Fi and hotspot peers with 1-tap connection.
+- **Luxury Designer QR Code:** Rounded-dot gradient QR code matrix with an embedded central glowing xChat shield emblem and live camera viewfinder scanner.
+- **Visual Safety Fingerprint:** 6-symbol emoji blocks (e.g. `🍀⚡👑🌈🎯🧩`) for effortless verbal verification against man-in-the-middle attacks.
+- **Message Bubbles & Read Receipts:** Incoming obsidian cards (`#141414`) and outgoing pastel lavender bubbles (`#d4c4fb`) with timestamps and double checkmarks (`✓✓`).
 
 ---
 
-### Step 0.5: Real Cross-Device Communication Tutorial (Phone ↔ Laptop ↔ PC)
+### Step 0.5: Real Cross-Device Zero-Config Tutorial (Phone ↔ Laptop ↔ PC)
 
-Two users with different devices (e.g., an Android phone and a MacBook, or two laptops) can communicate directly across local Wi-Fi, hotspot, or LAN:
+Two users with different devices (e.g., an Android phone running `xchat.apk` and a MacBook/Linux/Windows machine running `xchat app`) can communicate effortlessly without ever typing IP addresses:
 
-1. **Both devices connect to the same Wi-Fi network or a phone hotspot** (no cellular data needed).
-2. **Device 1 (e.g., Android Phone with xChat APK):**
-   - Open the xChat app.
-   - Look at the top pill: your reachable address is displayed (e.g., `192.168.1.45:9400`).
-   - Tap the pill to copy or share it with your friend.
-3. **Device 2 (e.g., Laptop running `xchat app`):**
-   - Run `xchat app`.
-   - Tap the blue **`+`** button in the bottom right corner of the chat list.
-   - Enter Alias: `Phone Friend`
-   - Enter Reachable Socket: `192.168.1.45:9400`
-   - Click **Connect & Add**.
-4. **Start Messaging:**
-   - Type your message and hit Enter or tap **➤**.
-   - The message is encrypted and dispatched directly over the local network.
-   - The Android phone instantly vibrates, chimes, and renders the incoming message bubble!
-   - Reply back from Android — the laptop screen instantly shows the response with double checkmarks (`✓✓`).
+#### Method 1: Nearby Mesh Radar (Zero-Config Automatic Discovery)
+1. **Connect both devices to the same Wi-Fi network or a phone hotspot** (no internet or mobile data required).
+2. **Open xChat on both devices:**
+   - Launch the **xChat app** on Android or run `xchat app` on your computer.
+3. **Check the Nearby Mesh Radar:**
+   - In the top carousel below the search bar, nearby peers appear automatically via UDP beacons.
+   - Tap your friend's avatar in the radar strip — xChat automatically resolves their socket address, verifies their cryptographic identity, and creates an encrypted channel!
+
+#### Method 2: Luxury QR Code & Camera Scanner
+1. On Device 1 (e.g. Phone), tap the **QR Code** icon in the header to display your personalized luxury QR badge.
+2. On Device 2 (e.g. Laptop or second Phone), tap **Scan QR** or the camera icon.
+3. Point your camera at the screen: xChat's in-app video viewfinder instantly decodes the invitation URI (`xchat://invite/<username>?addr=...&fp=...&sock=...`) and connects immediately!
+
+#### Method 3: Smart Connect Bar
+1. Tap the pastel **`+`** button or use the search bar.
+2. Paste an `xchat://invite/...` link, type an `@username`, or enter a direct `IP:Port` socket.
+3. Tap **Connect & Add** to start chatting with instant end-to-end encryption.
+
+#### Real-Time Chat & Audio Tones:
+- Send text, emojis, or simulated voice tone waveforms.
+- Incoming messages play rich Web Audio synthesized chimes and trigger Android haptic pulses.
+- Every message advances the Double Ratchet key ratchet for forward secrecy and post-compromise security.
 
 ---
 

@@ -2,17 +2,27 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::Zeroize;
 
 use crate::{errors::CryptoError, kdf::derive_discovery_token};
 
 /// Long-term cryptographic identity keypair for an xChat device.
 /// Combines an Ed25519 identity key for digital signatures with an X25519 key for Diffie-Hellman.
-#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct IdentityKeyPair {
-    #[zeroize(skip)]
     pub signing_key: SigningKey,
     pub dh_secret: StaticSecret,
+}
+
+impl Zeroize for IdentityKeyPair {
+    fn zeroize(&mut self) {
+        self.signing_key = SigningKey::from_bytes(&[0u8; 32]);
+    }
+}
+
+impl Drop for IdentityKeyPair {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
 }
 
 /// Public component of a device's cryptographic identity.
@@ -91,6 +101,22 @@ impl IdentityPublicKey {
         hex::encode(self.sign_pubkey)
     }
 
+    /// Visual fingerprint representation (6 memorable symbols) for human out-of-band verification.
+    pub fn visual_fingerprint(&self) -> String {
+        const EMOJI_ALPHABET: [&str; 32] = [
+            "🪐", "🚀", "🛰️", "🛡️", "💎", "⚡", "🌊", "🔥", "🌲", "🌸", "🍀", "🦊", "🦅", "🦉",
+            "🐬", "🦋", "⚓", "🧭", "🔑", "🔒", "🔮", "🧬", "🌟", "🌕", "🌈", "🏔️", "☕", "🎯",
+            "🧩", "🕊️", "🦁", "👑",
+        ];
+        let bytes = &self.sign_pubkey;
+        let mut symbols = String::with_capacity(24);
+        for i in 0..6 {
+            let idx = (bytes[i] as usize ^ (bytes[i + 6] as usize)) % EMOJI_ALPHABET.len();
+            symbols.push_str(EMOJI_ALPHABET[idx]);
+        }
+        symbols
+    }
+
     /// Compute rotating ephemeral discovery token for metadata-safe nearby advertising.
     pub fn ephemeral_discovery_token(&self, epoch: u64) -> [u8; 16] {
         derive_discovery_token(&self.sign_pubkey, epoch)
@@ -127,5 +153,15 @@ mod tests {
         let secret_ba = bob.diffie_hellman(&alice_pub.dh_pubkey);
 
         assert_eq!(secret_ab, secret_ba);
+    }
+
+    #[test]
+    fn test_visual_fingerprint_deterministic() {
+        let alice = IdentityKeyPair::generate();
+        let pub1 = alice.public_key();
+        let fp1 = pub1.visual_fingerprint();
+        let fp2 = pub1.visual_fingerprint();
+        assert_eq!(fp1, fp2);
+        assert!(!fp1.is_empty());
     }
 }
