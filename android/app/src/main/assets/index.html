@@ -2477,8 +2477,42 @@
         let contacts = JSON.parse(Storage.get('contacts') || '[]');
         let activeContact = null;
         let chatHistories = JSON.parse(Storage.get('chat_histories') || '{}');
-        let isNative = !!(window.AndroidBridge && window.AndroidBridge.isNativeAndroid);
-        const API_BASE = (window.location.protocol === 'file:') ? 'http://127.0.0.1:4000' : '';
+        function isAndroid() {
+            return !!(
+                (typeof window !== 'undefined' && window.AndroidBridge) ||
+                (typeof window !== 'undefined' && window.location && (window.location.protocol === 'file:' || (window.location.href && window.location.href.includes('android_asset'))))
+            );
+        }
+
+        async function fetchWithTimeout(resource, timeout = 2500, options = {}) {
+            if (typeof AbortController === 'undefined') {
+                return fetch(resource, options);
+            }
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
+            try {
+                const response = await fetch(resource, {
+                    ...options,
+                    signal: controller.signal
+                });
+                clearTimeout(id);
+                return response;
+            } catch (error) {
+                clearTimeout(id);
+                throw error;
+            }
+        }
+
+        function formatReachableDisplay(reachable) {
+            if (!reachable || reachable === 'Loading...') return 'Physical BLE Mesh Active';
+            if (reachable.startsWith('127.0.0.1')) {
+                return reachable + ' (BLE Mesh)';
+            }
+            return reachable;
+        }
+
+        let isNative = isAndroid();
+        const API_BASE = '';
 
         function updateProfileHeaderBadge() {
             const el = document.getElementById('headerUserHandle');
@@ -2486,49 +2520,54 @@
         }
 
         async function init() {
-            if (isNative && window.AndroidBridge) {
-                try {
-                    const reachable = window.AndroidBridge.getReachableAddress();
-                    if (reachable) myIdentity.reachable = reachable;
-                    if (window.AndroidBridge.getUsername) {
-                        const u = window.AndroidBridge.getUsername();
-                        if (u) myIdentity.username = u;
+            isNative = isAndroid();
+            if (isAndroid()) {
+                if (window.AndroidBridge) {
+                    try {
+                        const reachable = window.AndroidBridge.getReachableAddress();
+                        if (reachable) myIdentity.reachable = reachable;
+                        if (window.AndroidBridge.getUsername) {
+                            const u = window.AndroidBridge.getUsername();
+                            if (u) myIdentity.username = u;
+                        }
+                        if (window.AndroidBridge.getDisplayName) {
+                            const d = window.AndroidBridge.getDisplayName();
+                            if (d) myIdentity.displayName = d;
+                        }
+                        if (window.AndroidBridge.getMeshAddress) {
+                            const a = window.AndroidBridge.getMeshAddress();
+                            if (a) myIdentity.address = a;
+                        }
+                        if (window.AndroidBridge.getFingerprint) {
+                            const f = window.AndroidBridge.getFingerprint();
+                            if (f) myIdentity.fingerprint = f;
+                        }
+                        if (window.AndroidBridge.getSignPubkey) {
+                            const sp = window.AndroidBridge.getSignPubkey();
+                            if (sp) myIdentity.signPubkey = sp;
+                        }
+                        if (window.AndroidBridge.getDhPubkey) {
+                            const dp = window.AndroidBridge.getDhPubkey();
+                            if (dp) myIdentity.dhPubkey = dp;
+                        }
+                        if (window.AndroidBridge.getVisualFingerprint) {
+                            const vfp = window.AndroidBridge.getVisualFingerprint();
+                            if (vfp) myIdentity.visualFingerprint = vfp;
+                        }
+                        Storage.set('my_username', myIdentity.username);
+                        Storage.set('my_display_name', myIdentity.displayName);
+                        Storage.set('my_address', myIdentity.address);
+                        Storage.set('my_fingerprint', myIdentity.fingerprint);
+                        if (myIdentity.signPubkey) Storage.set('my_sign_pubkey', myIdentity.signPubkey);
+                        if (myIdentity.dhPubkey) Storage.set('my_dh_pubkey', myIdentity.dhPubkey);
+                    } catch(e) {
+                        console.error("AndroidBridge init error:", e);
                     }
-                    if (window.AndroidBridge.getDisplayName) {
-                        const d = window.AndroidBridge.getDisplayName();
-                        if (d) myIdentity.displayName = d;
-                    }
-                    if (window.AndroidBridge.getMeshAddress) {
-                        const a = window.AndroidBridge.getMeshAddress();
-                        if (a) myIdentity.address = a;
-                    }
-                    if (window.AndroidBridge.getFingerprint) {
-                        const f = window.AndroidBridge.getFingerprint();
-                        if (f) myIdentity.fingerprint = f;
-                    }
-                    if (window.AndroidBridge.getSignPubkey) {
-                        const sp = window.AndroidBridge.getSignPubkey();
-                        if (sp) myIdentity.signPubkey = sp;
-                    }
-                    if (window.AndroidBridge.getDhPubkey) {
-                        const dp = window.AndroidBridge.getDhPubkey();
-                        if (dp) myIdentity.dhPubkey = dp;
-                    }
-                    if (window.AndroidBridge.getVisualFingerprint) {
-                        const vfp = window.AndroidBridge.getVisualFingerprint();
-                        if (vfp) myIdentity.visualFingerprint = vfp;
-                    }
-                    Storage.set('my_username', myIdentity.username);
-                    Storage.set('my_display_name', myIdentity.displayName);
-                    Storage.set('my_address', myIdentity.address);
-                    Storage.set('my_fingerprint', myIdentity.fingerprint);
-                    if (myIdentity.signPubkey) Storage.set('my_sign_pubkey', myIdentity.signPubkey);
-                    if (myIdentity.dhPubkey) Storage.set('my_dh_pubkey', myIdentity.dhPubkey);
-                } catch(e) {}
+                }
             } else {
                 try {
-                    const res = await fetch(API_BASE + '/api/identity');
-                    if (res.ok) {
+                    const res = await fetchWithTimeout(API_BASE + '/api/identity', 2000);
+                    if (res && res.ok) {
                         const data = await res.json();
                         myIdentity.username = data.username || myIdentity.username;
                         myIdentity.displayName = data.display_name || myIdentity.displayName;
@@ -2548,8 +2587,8 @@
                 } catch(e) {}
 
                 try {
-                    const res = await fetch(API_BASE + '/api/contacts');
-                    if (res.ok) {
+                    const res = await fetchWithTimeout(API_BASE + '/api/contacts', 2000);
+                    if (res && res.ok) {
                         const srvContacts = await res.json();
                         if (srvContacts && srvContacts.length > 0) {
                             contacts = srvContacts;
@@ -2559,20 +2598,30 @@
                 } catch(e) {}
             }
 
-            document.getElementById('myReachableSocket').innerText = myIdentity.reachable;
+            const sockEl = document.getElementById('myReachableSocket');
+            if (sockEl) {
+                sockEl.innerText = formatReachableDisplay(myIdentity.reachable);
+            }
             updateProfileHeaderBadge();
-            updateQrDisplay();
+            try {
+                updateQrDisplay();
+            } catch(e) {
+                console.error("updateQrDisplay error:", e);
+            }
             SoundFX.updateUi();
             drawAcousticWaveform(0.2, 0);
-            document.getElementById('profileDetailsBody').innerText = 
-                `Username:    ${myIdentity.username || '@operator'}\n` +
-                `Display Name:${myIdentity.displayName || 'Mesh Operator'}\n` +
-                `Address:     ${myIdentity.address}\n` +
-                `Reachable:   ${myIdentity.reachable}\n` +
-                `Fingerprint: ${myIdentity.fingerprint}\n` +
-                `Platform:    ${isNative ? 'Android Native (WebView + Socket)' : 'Desktop (Tokio Rust Server)'}\n` +
-                `Encryption:  X3DH + Double Ratchet + ChaCha20-Poly1305\n` +
-                `Mixnet:      Chaumian Sphinx Onion Routing`;
+            const profBody = document.getElementById('profileDetailsBody');
+            if (profBody) {
+                profBody.innerText = 
+                    `Username:    ${myIdentity.username || '@operator'}\n` +
+                    `Display Name:${myIdentity.displayName || 'Mesh Operator'}\n` +
+                    `Address:     ${myIdentity.address}\n` +
+                    `Reachable:   ${myIdentity.reachable}\n` +
+                    `Fingerprint: ${myIdentity.fingerprint}\n` +
+                    `Platform:    ${isNative ? 'Android Native (WebView + BLE Mesh)' : 'Desktop (Tokio Rust Server)'}\n` +
+                    `Encryption:  X3DH + Double Ratchet + ChaCha20-Poly1305\n` +
+                    `Mixnet:      Chaumian Sphinx Onion Routing`;
+            }
 
             renderContacts();
             if (!contacts || contacts.length === 0) {
@@ -2601,10 +2650,12 @@
             }
 
             fetchDiscoveredPeers();
-            setInterval(fetchDiscoveredPeers, 3000);
+            if (!window._discoveryInterval) {
+                window._discoveryInterval = setInterval(fetchDiscoveredPeers, 3000);
+            }
 
-            if (!isNative) {
-                setInterval(pollServerMessages, 1500);
+            if (!isNative && !window._pollInterval) {
+                window._pollInterval = setInterval(pollServerMessages, 1500);
             }
         }
 
@@ -2612,15 +2663,29 @@
 
         async function fetchDiscoveredPeers() {
             let peers = [];
-            if (isNative && window.AndroidBridge && window.AndroidBridge.getDiscoveredPeers) {
-                try {
-                    const raw = window.AndroidBridge.getDiscoveredPeers();
-                    peers = JSON.parse(raw || '[]');
-                } catch(e) {}
+            if (isAndroid()) {
+                if (window.AndroidBridge) {
+                    if (window.AndroidBridge.getDiscoveredPeers) {
+                        try {
+                            const raw = window.AndroidBridge.getDiscoveredPeers();
+                            peers = JSON.parse(raw || '[]');
+                        } catch(e) {}
+                    }
+                    if (window.AndroidBridge.getReachableAddress) {
+                        try {
+                            const fresh = window.AndroidBridge.getReachableAddress();
+                            if (fresh && fresh !== myIdentity.reachable) {
+                                myIdentity.reachable = fresh;
+                                const sockEl = document.getElementById('myReachableSocket');
+                                if (sockEl) sockEl.innerText = formatReachableDisplay(fresh);
+                            }
+                        } catch(e) {}
+                    }
+                }
             } else {
                 try {
-                    const res = await fetch(API_BASE + '/api/discovered');
-                    if (res.ok) {
+                    const res = await fetchWithTimeout(API_BASE + '/api/discovered', 2000);
+                    if (res && res.ok) {
                         peers = await res.json();
                     }
                 } catch(e) {}
@@ -2978,7 +3043,7 @@
                 time_str: timeStr
             });
 
-            if (isNative) {
+            if (isAndroid()) {
                 const isBleTarget = !activeContact.target || 
                                     activeContact.target.startsWith('ble:') || 
                                     activeContact.target === 'Physical BLE Mesh' || 
@@ -2997,7 +3062,7 @@
                 }
             } else {
                 try {
-                    await fetch(API_BASE + '/api/send', {
+                    await fetchWithTimeout(API_BASE + '/api/send', 2500, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -3114,9 +3179,9 @@
         };
 
         async function pollServerMessages() {
-            if (!activeContact) return;
+            if (isAndroid() || !activeContact) return;
             try {
-                const res = await fetch(API_BASE + '/api/messages?peer=' + encodeURIComponent(activeContact.alias));
+                const res = await fetchWithTimeout(API_BASE + '/api/messages?peer=' + encodeURIComponent(activeContact.alias), 1500);
                 if (res.ok) {
                     const msgs = await res.json();
                     if (msgs && msgs.length > 0) {
@@ -3205,26 +3270,28 @@
                     return;
                 }
 
-                if (isNative && window.AndroidBridge && window.AndroidBridge.resolveUsername) {
-                    try {
-                        const res = window.AndroidBridge.resolveUsername(u);
-                        const data = JSON.parse(res || '{}');
-                        if (data && data.ip && data.port) {
-                            const sock = `${data.ip}:${data.port}`;
-                            smartResolvedTarget = sock;
-                            smartResolvedPeer = data;
-                            if (targetField) targetField.value = sock;
-                            if (aliasField && !aliasField.value) aliasField.value = data.display_name || data.username;
-                            if (feedback) {
-                                feedback.innerHTML = `✓ Found <b style="color:var(--pastel-lavender);">${escapeHtml(u)}</b> on mesh: ${sock}`;
-                                feedback.style.color = "var(--status-green)";
+                if (isAndroid()) {
+                    if (window.AndroidBridge && window.AndroidBridge.resolveUsername) {
+                        try {
+                            const res = window.AndroidBridge.resolveUsername(u);
+                            const data = JSON.parse(res || '{}');
+                            if (data && data.ip && data.port) {
+                                const sock = `${data.ip}:${data.port}`;
+                                smartResolvedTarget = sock;
+                                smartResolvedPeer = data;
+                                if (targetField) targetField.value = sock;
+                                if (aliasField && !aliasField.value) aliasField.value = data.display_name || data.username;
+                                if (feedback) {
+                                    feedback.innerHTML = `✓ Found <b style="color:var(--pastel-lavender);">${escapeHtml(u)}</b> on mesh: ${sock}`;
+                                    feedback.style.color = "var(--status-green)";
+                                }
+                                return;
                             }
-                            return;
-                        }
-                    } catch(e) {}
+                        } catch(e) {}
+                    }
                 } else {
                     try {
-                        const resp = await fetch(API_BASE + '/api/connect_username', {
+                        const resp = await fetchWithTimeout(API_BASE + '/api/connect_username', 2500, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ username: u })
@@ -3320,9 +3387,9 @@
 
             Storage.set('contacts', JSON.stringify(contacts));
 
-            if (!isNative) {
+            if (!isAndroid()) {
                 try {
-                    await fetch(API_BASE + '/api/contacts', {
+                    await fetchWithTimeout(API_BASE + '/api/contacts', 2500, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(newPeer)
@@ -3353,10 +3420,10 @@
         function pingActivePeer() {
             if (!activeContact) return;
             const target = activeContact.target;
-            if (isNative && window.AndroidBridge.pingPeer) {
+            if (isAndroid() && window.AndroidBridge && window.AndroidBridge.pingPeer) {
                 window.AndroidBridge.pingPeer(target, 'ping_' + Date.now());
-            } else {
-                fetch(API_BASE + '/api/ping', {
+            } else if (!isAndroid()) {
+                fetchWithTimeout(API_BASE + '/api/ping', 2500, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ target: target })
@@ -3912,17 +3979,17 @@
         async function createNewIdentity() {
             try {
                 let newKeys = null;
-                if (isNative && window.AndroidBridge && window.AndroidBridge.generateNewKeys) {
+                if (window.AndroidBridge && window.AndroidBridge.generateNewKeys) {
                     const raw = window.AndroidBridge.generateNewKeys();
                     newKeys = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                } else {
-                    const res = await fetch(API_BASE + '/api/keygen', { method: 'POST' });
-                    if (res.ok) {
+                } else if (!isAndroid()) {
+                    const res = await fetchWithTimeout(API_BASE + '/api/keygen', 2500, { method: 'POST' });
+                    if (res && res.ok) {
                         newKeys = await res.json();
                     }
                 }
 
-                if (newKeys && newKeys.address) {
+                if (newKeys && (newKeys.address || newKeys.status === 'generated')) {
                     myIdentity.address = newKeys.address;
                     myIdentity.fingerprint = newKeys.fingerprint || myIdentity.fingerprint;
                     myIdentity.visualFingerprint = newKeys.visual_fingerprint || getVisualFingerprintEmojis(myIdentity.fingerprint);
@@ -4022,9 +4089,9 @@
                 Storage.set('my_bio', bVal);
                 Storage.set('my_avatar_index', String(selectedAvatarIndex));
 
-                if (!isNative) {
+                if (!isAndroid()) {
                     try {
-                        await fetch(API_BASE + '/api/profile', {
+                        await fetchWithTimeout(API_BASE + '/api/profile', 2500, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -4102,6 +4169,9 @@
             init();
         }
         window.addEventListener('load', init);
+        // Fallback timer to ensure Android bridge binding has occurred
+        setTimeout(init, 200);
+        setTimeout(init, 800);
     </script>
 </body>
 </html>
