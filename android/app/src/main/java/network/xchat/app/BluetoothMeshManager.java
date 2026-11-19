@@ -269,6 +269,33 @@ public class BluetoothMeshManager {
                         String fullPayload = reassembler.processPacket(value);
                         if (fullPayload != null) {
                             Log.i(TAG, "Fully reassembled physical BLE envelope from " + device.getAddress() + " (" + fullPayload.length() + " bytes)");
+                            
+                            try {
+                                JSONObject json = new JSONObject(fullPayload);
+                                String uname = json.optString("username", json.optString("sender_alias", json.optString("alias", "")));
+                                String dname = json.optString("display_name", uname);
+                                String saddr = json.optString("address", json.optString("sender_address", json.optString("sender", "")));
+
+                                if (!uname.isEmpty()) {
+                                    DiscoveredBleNode node = discoveredNodes.get(device.getAddress());
+                                    if (node == null) {
+                                        node = new DiscoveredBleNode();
+                                        node.macAddress = device.getAddress();
+                                    }
+                                    node.username = uname.startsWith("@") ? uname : "@" + uname;
+                                    node.deviceName = (!dname.isEmpty()) ? dname : node.username;
+                                    if (!saddr.isEmpty()) node.meshAddress = saddr;
+                                    node.lastSeen = System.currentTimeMillis();
+                                    node.rssi = -45;
+                                    discoveredNodes.put(device.getAddress(), node);
+                                    bridge.onBlePeerDiscovered(node);
+                                }
+
+                                if ("handshake".equals(json.optString("type"))) {
+                                    sendHandshake(device.getAddress());
+                                }
+                            } catch (Exception ignored) {}
+
                             bridge.handleInboundBleEnvelope(fullPayload, device.getAddress());
                         }
                     }
@@ -403,7 +430,7 @@ public class BluetoothMeshManager {
             }
 
             ScanSettings settings = new ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
                 .build();
 
             scanCallback = new ScanCallback() {
@@ -499,6 +526,20 @@ public class BluetoothMeshManager {
     // SENDING ENVELOPE OVER PHYSICAL BLE GATT
     // =========================================================================
 
+    public void sendHandshake(final String targetMac) {
+        try {
+            JSONObject hs = new JSONObject();
+            hs.put("type", "handshake");
+            hs.put("username", bridge.getUsername());
+            hs.put("display_name", bridge.getDisplayName());
+            hs.put("address", bridge.getMeshAddress());
+            hs.put("fingerprint", bridge.getFingerprint());
+            sendEnvelope(targetMac, hs.toString(), null);
+        } catch (Exception e) {
+            Log.e(TAG, "Error generating BLE handshake", e);
+        }
+    }
+
     public void sendEnvelope(final String targetMac, final String jsonPayload, final BleSendCallback callback) {
         final String cleanMac = targetMac.replace("ble:", "");
 
@@ -517,18 +558,21 @@ public class BluetoothMeshManager {
                     try {
                         byte[] payloadBytes = jsonPayload.getBytes(StandardCharsets.UTF_8);
                         int msgId = msgIdCounter.getAndIncrement() & 0x7FFF;
-                        List<byte[]> chunks = chunkPayload(payloadBytes, 512, msgId);
+                        // Use safe 20-byte chunks for notifications so Android BLE stack never drops them
+                        List<byte[]> chunks = chunkPayload(payloadBytes, 20, msgId);
                         boolean ok = true;
                         for (byte[] chunk : chunks) {
                             txChar.setValue(chunk);
                             if (!gattServer.notifyCharacteristicChanged(targetDevice, txChar, false)) {
+                                Log.w(TAG, "notifyCharacteristicChanged returned false for target " + targetDevice.getAddress());
                                 ok = false;
                                 break;
                             }
-                            try { Thread.sleep(20); } catch (Exception ignored) {}
+                            try { Thread.sleep(15); } catch (Exception ignored) {}
                         }
                         if (callback != null) callback.onResult(ok, ok ? null : "GATT notification failed");
                     } catch (Exception e) {
+                        Log.e(TAG, "Error in sendEnvelope GATT notification", e);
                         if (callback != null) callback.onResult(false, e.getMessage());
                     }
                 }
