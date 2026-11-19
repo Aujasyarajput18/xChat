@@ -150,13 +150,20 @@ impl BleCentralTransport {
 
             debug!("BLE physical hardware background scanner active.");
 
+            let mut loop_count = 0u64;
             loop {
                 tokio::time::sleep(Duration::from_millis(2500)).await;
                 if !self.is_available() {
                     break;
                 }
+                loop_count += 1;
+                if loop_count % 6 == 0 {
+                    // Re-assert start_scan every 15s in case adapter was powered off / slept
+                    let _ = adapter.start_scan(ScanFilter::default()).await;
+                }
 
                 let Ok(peripherals) = adapter.peripherals().await else {
+                    let _ = adapter.start_scan(ScanFilter::default()).await;
                     continue;
                 };
 
