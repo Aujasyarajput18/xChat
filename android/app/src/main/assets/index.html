@@ -3320,7 +3320,11 @@ function sendSosPayload(lat, lon) {
     .then(r => r.json())
     .then(data => {
         const reached = (data && typeof data.peers_reached === 'number') ? data.peers_reached : 0;
-        showToast(`Emergency alert sent. Reached ${reached} nearby peer${reached === 1 ? '' : 's'}.`);
+        if (reached === 0 || data.status === 'failed') {
+            showToast("Emergency alert failed: no contacts reached.");
+        } else {
+            showToast(`Emergency alert sent. Reached ${reached} nearby peer${reached === 1 ? '' : 's'}.`);
+        }
     })
     .catch(_err => {
         showToast("Failed to broadcast emergency alert.");

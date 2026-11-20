@@ -940,18 +940,8 @@ pub async fn handle_http_connection<S>(
         let peers_json = {
             let st = state_clone.lock().unwrap();
             let my_addr = st.keystore.identity.public_key().address();
-            let my_username = st.profile.username.to_lowercase();
-            let my_local_sock = format!("{}:{}", st.local_ip, st.local_port);
-
-            let mut peers: Vec<serde_json::Value> = st
-                .discovery
-                .get_active_peers()
+            let mut peers: Vec<serde_json::Value> = active_remote_peers(&st)
                 .into_iter()
-                .filter(|p| {
-                    p.address != my_addr
-                        && p.username.to_lowercase() != my_username
-                        && p.socket_addr != my_local_sock
-                })
                 .map(|p| {
                     let (ip, port) = if let Some((h, prt)) = p.socket_addr.split_once(':') {
                         (h.to_string(), prt.parse::<u16>().unwrap_or(8080))
@@ -1329,7 +1319,7 @@ pub async fn handle_http_connection<S>(
                 };
                 let (env_opt, active_peers) = {
                     let mut st = state_clone.lock().unwrap();
-                    let peers = st.discovery.get_active_peers();
+                    let peers = active_remote_peers(&st);
                     let env = if let Some(burner) = st.burner_rooms.get_mut(&room_alias) {
                         burner.post_message(&my_handle, &req.text, now_ts).ok()
                     } else {
@@ -1745,9 +1735,7 @@ pub async fn handle_http_connection<S>(
 
                     {
                         let mut st = state_clone.lock().unwrap();
-                        let effective_target = st
-                            .discovery
-                            .get_active_peers()
+                        let effective_target = active_remote_peers(&st)
                             .into_iter()
                             .find(|p| p.address == sender_addr)
                             .map(|p| p.socket_addr)
@@ -1974,9 +1962,7 @@ pub async fn handle_http_connection<S>(
 
                 {
                     let mut st = state_clone.lock().unwrap();
-                    let effective_target = st
-                        .discovery
-                        .get_active_peers()
+                    let effective_target = active_remote_peers(&st)
                         .into_iter()
                         .find(|p| p.address == sender_addr)
                         .map(|p| p.socket_addr)
@@ -2159,7 +2145,7 @@ pub async fn handle_http_connection<S>(
                 7200,
             );
             let addr = st.keystore.identity.public_key().address();
-            let peers = st.discovery.get_active_peers();
+            let peers = active_remote_peers(&st);
             (beacon, addr, peers)
         };
 
@@ -2181,10 +2167,14 @@ pub async fn handle_http_connection<S>(
                 }
             }
         }
-        let resp_body = format!(
-            r#"{{"status":"broadcasted","peers_reached":{}}}"#,
-            peer_count
-        );
+        let resp_body = if peer_count == 0 {
+            r#"{"status":"failed","peers_reached":0,"error":"No peers reached"}"#.to_string()
+        } else {
+            format!(
+                r#"{{"status":"broadcasted","peers_reached":{}}}"#,
+                peer_count
+            )
+        };
         let resp = json_response("200 OK", &resp_body, &cors_headers);
         let _ = socket.write_all(resp.as_bytes()).await;
     } else if path == "/jsqr.min.js" {
@@ -2250,6 +2240,28 @@ fn migrate_contact_messages(
         }
         *dest = combined;
     }
+}
+
+fn active_remote_peers(st: &AppState) -> Vec<xchat_core::profile::DiscoveredPeer> {
+    let my_addr = st.keystore.identity.public_key().address();
+    let my_username = st.profile.username.to_lowercase();
+    let my_local_sock = format!("{}:{}", st.local_ip, st.local_port);
+
+    st.discovery
+        .get_active_peers()
+        .into_iter()
+        .filter(|p| {
+            p.address != my_addr
+                && p.username.to_lowercase() != my_username
+                && p.socket_addr != my_local_sock
+                && !p.socket_addr.is_empty()
+                && (st.local_port == 0
+                    || (!p.socket_addr.ends_with(&format!(":{}", st.local_port))
+                        && p.socket_addr != format!("127.0.0.1:{}", st.local_port)
+                        && p.socket_addr != format!("localhost:{}", st.local_port)
+                        && p.socket_addr != format!("0.0.0.0:{}", st.local_port)))
+        })
+        .collect()
 }
 
 fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> {
@@ -3229,7 +3241,8 @@ mod tests {
         );
         let resp_sos = send_test_http_request(port, state.clone(), &sos_req).await;
         assert!(resp_sos.starts_with("HTTP/1.1 200 OK"));
-        assert!(resp_sos.contains(r#""status":"broadcasted""#));
+        assert!(resp_sos.contains(r#""status":"failed""#));
+        assert!(resp_sos.contains(r#""peers_reached":0"#));
     }
 
     #[test]
@@ -3770,5 +3783,167 @@ mod tests {
         assert_eq!(r_msgs.len(), 2, "Both messages must persist across restart");
         assert_eq!(r_msgs[0].text, "first ever");
         assert_eq!(r_msgs[1].text, "second");
+    }
+
+    #[tokio::test]
+    async fn test_isolated_node_and_three_node_network_recipient_count() {
+        // 1. Isolated Node with self injected in discovery engine
+        let (state_a, _tmp_a) = create_test_app_state().await;
+        let listener_a = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port_a = listener_a.local_addr().unwrap().port();
+        {
+            let mut st = state_a.lock().unwrap();
+            st.local_port = port_a;
+        }
+        let st_a_srv = state_a.clone();
+        tokio::spawn(run_server_loop(
+            listener_a,
+            st_a_srv,
+            "127.0.0.1".to_string(),
+        ));
+
+        let csrf_token_a = state_a.lock().unwrap().csrf_token.clone();
+        let my_addr_a = state_a
+            .lock()
+            .unwrap()
+            .keystore
+            .identity
+            .public_key()
+            .address();
+        let my_uname_a = state_a.lock().unwrap().profile.username.clone();
+
+        let now_ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Register self in discovery engine to simulate self-beacon reflection
+        let self_peer = xchat_core::profile::DiscoveredPeer {
+            username: my_uname_a.clone(),
+            display_name: "Node A".to_string(),
+            address: my_addr_a.clone(),
+            fingerprint: "FP_A".to_string(),
+            socket_addr: format!("127.0.0.1:{}", port_a),
+            discovered_at: now_ts,
+            transport_type: "Wi-Fi Beacon".to_string(),
+        };
+        state_a.lock().unwrap().discovery.register_peer(self_peer);
+
+        // Join room #isolateroom on isolated node
+        let join_body = r#"{"room":"isolateroom","pass":"secret"}"#;
+        let join_req = format!(
+            "POST /api/burner/join HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port_a, csrf_token_a, join_body.len(), join_body
+        );
+        let join_resp = send_test_http_request(port_a, state_a.clone(), &join_req).await;
+        assert!(join_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // Room send on isolated node must report peers_reached: 0 and status: failed
+        let room_send_body =
+            r##"{"alias":"#isolateroom","target":"burner","text":"isolated echo check"}"##;
+        let room_send_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port_a, csrf_token_a, room_send_body.len(), room_send_body
+        );
+        let room_resp = send_test_http_request(port_a, state_a.clone(), &room_send_req).await;
+        assert!(
+            room_resp.contains(r#""status":"failed""#),
+            "Got: {}",
+            room_resp
+        );
+        assert!(
+            room_resp.contains(r#""peers_reached":0"#),
+            "Got: {}",
+            room_resp
+        );
+
+        // SOS on isolated node must report peers_reached: 0 and status: failed
+        let sos_body = r#"{"lat":12.34,"lon":56.78,"message":"Isolated SOS"}"#;
+        let sos_req = format!(
+            "POST /api/sos HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port_a, csrf_token_a, sos_body.len(), sos_body
+        );
+        let sos_resp = send_test_http_request(port_a, state_a.clone(), &sos_req).await;
+        assert!(
+            sos_resp.contains(r#""status":"failed""#),
+            "Got: {}",
+            sos_resp
+        );
+        assert!(
+            sos_resp.contains(r#""peers_reached":0"#),
+            "Got: {}",
+            sos_resp
+        );
+
+        // 2. 3-Node Network (Node A, Node B, Node C)
+        let (state_b, _tmp_b) = create_test_app_state().await;
+        let listener_b = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port_b = listener_b.local_addr().unwrap().port();
+        tokio::spawn(run_server_loop(
+            listener_b,
+            state_b.clone(),
+            "127.0.0.1".to_string(),
+        ));
+
+        let (state_c, _tmp_c) = create_test_app_state().await;
+        let listener_c = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port_c = listener_c.local_addr().unwrap().port();
+        tokio::spawn(run_server_loop(
+            listener_c,
+            state_c.clone(),
+            "127.0.0.1".to_string(),
+        ));
+
+        let addr_b = state_b
+            .lock()
+            .unwrap()
+            .keystore
+            .identity
+            .public_key()
+            .address();
+        let addr_c = state_c
+            .lock()
+            .unwrap()
+            .keystore
+            .identity
+            .public_key()
+            .address();
+
+        // Register Node B and Node C in Node A's discovery (along with self already registered)
+        let peer_b = xchat_core::profile::DiscoveredPeer {
+            username: "user_b".to_string(),
+            display_name: "Node B".to_string(),
+            address: addr_b.clone(),
+            fingerprint: "FP_B".to_string(),
+            socket_addr: format!("127.0.0.1:{}", port_b),
+            discovered_at: now_ts,
+            transport_type: "Wi-Fi Beacon".to_string(),
+        };
+        let peer_c = xchat_core::profile::DiscoveredPeer {
+            username: "user_c".to_string(),
+            display_name: "Node C".to_string(),
+            address: addr_c.clone(),
+            fingerprint: "FP_C".to_string(),
+            socket_addr: format!("127.0.0.1:{}", port_c),
+            discovered_at: now_ts,
+            transport_type: "Wi-Fi Beacon".to_string(),
+        };
+        state_a.lock().unwrap().discovery.register_peer(peer_b);
+        state_a.lock().unwrap().discovery.register_peer(peer_c);
+
+        // Node A triggers SOS on 3-node network (self + B + C). Must report EXACTLY 2!
+        let sos_3node_resp = send_test_http_request(port_a, state_a.clone(), &sos_req).await;
+        assert!(
+            sos_3node_resp.contains(r#""status":"broadcasted""#),
+            "Got: {}",
+            sos_3node_resp
+        );
+        assert!(
+            sos_3node_resp.contains(r#""peers_reached":2"#),
+            "On 3-node network, SOS must report exactly 2, got: {}",
+            sos_3node_resp
+        );
     }
 }
