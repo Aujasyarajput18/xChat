@@ -377,7 +377,7 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
 
     let session_store_path = keystore_path.with_file_name(".xchat_sessions.bin");
     let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(&keystore_path))
-        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+        .expect("Failed to obtain device storage key; refusing fallback to insecure default");
     let sessions = xchat_core::session::load_sessions_encrypted(&session_store_path, &storage_key)
         .unwrap_or_default();
     let replay_store_path = keystore_path.with_file_name(".xchat_replay.bin");
@@ -728,7 +728,6 @@ pub async fn handle_http_connection<S>(
             orig.starts_with("http://localhost")
                 || orig.starts_with("http://127.0.0.1")
                 || orig.starts_with(&format!("http://{}:", local_ip_val))
-                || orig == "null"
         }
         None => true,
     };
@@ -1032,7 +1031,7 @@ pub async fn handle_http_connection<S>(
                     let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
                         &st.session_store_path,
                     ))
-                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                     let _ = save_contacts_encrypted(
                         &st.contacts,
                         &st.contacts_store_path,
@@ -1123,7 +1122,9 @@ pub async fn handle_http_connection<S>(
             }
             let storage_key =
                 KeyStore::get_or_create_device_storage_key_for_path(Some(&st.session_store_path))
-                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    .expect(
+                    "Failed to obtain device storage key; refusing fallback to insecure default",
+                );
             let _ = save_contacts_encrypted(&st.contacts, &st.contacts_store_path, &storage_key);
         }
         let resp = json_response("200 OK", r#"{"status":"added"}"#, &cors_headers);
@@ -1250,7 +1251,7 @@ pub async fn handle_http_connection<S>(
                     let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
                         &st.session_store_path,
                     ))
-                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                     let _ = save_messages_encrypted(
                         &st.messages,
                         &st.messages_store_path,
@@ -1311,7 +1312,7 @@ pub async fn handle_http_connection<S>(
                                     KeyStore::get_or_create_device_storage_key_for_path(Some(
                                         &st.session_store_path,
                                     ))
-                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                    .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                                 let _ = save_sessions_encrypted(
                                     &st.sessions,
                                     &st.session_store_path,
@@ -1352,7 +1353,7 @@ pub async fn handle_http_connection<S>(
                                         KeyStore::get_or_create_device_storage_key_for_path(Some(
                                             &st.session_store_path,
                                         ))
-                                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                        .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                                     let _ = save_sessions_encrypted(
                                         &st.sessions,
                                         &st.session_store_path,
@@ -1403,7 +1404,7 @@ pub async fn handle_http_connection<S>(
                                     KeyStore::get_or_create_device_storage_key_for_path(Some(
                                         &st.session_store_path,
                                     ))
-                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                    .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                                 let _ = save_messages_encrypted(
                                     &st.messages,
                                     &st.messages_store_path,
@@ -1436,7 +1437,7 @@ pub async fn handle_http_connection<S>(
                         let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
                             Some(&st.session_store_path),
                         )
-                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                        .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                         let _ = save_messages_encrypted(
                             &st.messages,
                             &st.messages_store_path,
@@ -1508,7 +1509,9 @@ pub async fn handle_http_connection<S>(
                 let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
                     &st.session_store_path,
                 ))
-                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                .expect(
+                    "Failed to obtain device storage key; refusing fallback to insecure default",
+                );
                 let _ = st
                     .replay_filter
                     .save_to_disk_encrypted(&replay_path, &storage_key);
@@ -1582,7 +1585,7 @@ pub async fn handle_http_connection<S>(
                         let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
                             Some(&st.session_store_path),
                         )
-                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                        .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                         let _ = save_messages_encrypted(
                             &st.messages,
                             &st.messages_store_path,
@@ -1669,7 +1672,7 @@ pub async fn handle_http_connection<S>(
                         let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
                             Some(&st.session_store_path),
                         )
-                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                        .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                         let _ = save_sessions_encrypted(
                             &st.sessions,
                             &st.session_store_path,
@@ -1704,7 +1707,7 @@ pub async fn handle_http_connection<S>(
                     let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
                         &st.session_store_path,
                     ))
-                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                     let _ =
                         save_sessions_encrypted(&st.sessions, &st.session_store_path, &storage_key);
                     Ok((addr, pt_bytes))
@@ -1799,7 +1802,7 @@ pub async fn handle_http_connection<S>(
                     let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
                         &st.session_store_path,
                     ))
-                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    .expect("Failed to obtain device storage key; refusing fallback to insecure default");
                     let _ = save_messages_encrypted(
                         &st.messages,
                         &st.messages_store_path,
@@ -3067,5 +3070,36 @@ mod tests {
                 "Must not create duplicate contact on matching address"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_origin_null_forbidden() {
+        let (state, _temp) = create_test_app_state().await;
+        let port = 8080;
+        let csrf_token = state.lock().unwrap().csrf_token.clone();
+
+        // 1. Request with Origin: null -> must return 403 Forbidden
+        let req_null_origin = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: null\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let resp = send_test_http_request(port, state.clone(), &req_null_origin).await;
+        assert!(
+            resp.starts_with("HTTP/1.1 403 Forbidden"),
+            "Origin: null must be rejected with 403 Forbidden, got: {}",
+            resp
+        );
+
+        // 2. Request with valid Origin: http://localhost -> must succeed with 200 OK
+        let req_valid_origin = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://localhost:8080\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let resp_valid = send_test_http_request(port, state.clone(), &req_valid_origin).await;
+        assert!(
+            resp_valid.starts_with("HTTP/1.1 200 OK"),
+            "Valid Origin must return 200 OK, got: {}",
+            resp_valid
+        );
     }
 }

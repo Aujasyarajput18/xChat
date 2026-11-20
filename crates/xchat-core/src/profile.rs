@@ -1,8 +1,4 @@
-use std::{
-    fs::{self, File},
-    io::{Read, Write},
-    path::Path,
-};
+use std::{fs::File, io::Read, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -120,17 +116,11 @@ impl UserProfile {
         Ok((username, address, fingerprint, socket))
     }
 
-    /// Persist user profile to local disk.
+    /// Persist user profile to local disk with 0600 permissions.
     pub fn save_to_disk(&self, path: &Path) -> Result<(), CoreError> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        }
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| CoreError::Serialization(e.to_string()))?;
-        let mut file = File::create(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        file.write_all(json.as_bytes())
-            .map_err(|e| CoreError::StorageError(e.to_string()))?;
-        Ok(())
+        crate::keystore::KeyStore::write_secure_file(path, json.as_bytes())
     }
 
     /// Load user profile from local disk.
@@ -201,6 +191,17 @@ mod tests {
         )
         .unwrap();
         profile.save_to_disk(&path).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&path).unwrap();
+            assert_eq!(
+                meta.permissions().mode() & 0o777,
+                0o600,
+                "Profile file must be created with 0600 permissions"
+            );
+        }
 
         let loaded = UserProfile::load_from_disk(&path).unwrap();
         assert_eq!(profile, loaded);

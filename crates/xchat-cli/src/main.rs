@@ -644,8 +644,9 @@ async fn main() -> anyhow::Result<()> {
 
             let recipient_addr = recipient_bundle.identity_key.address();
             let session_path = keystore_path.with_file_name(".xchat_sessions.bin");
-            let storage_key = KeyStore::get_or_create_device_storage_key()
-                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+            let storage_key = KeyStore::get_or_create_device_storage_key().expect(
+                "Failed to obtain device storage key; refusing fallback to insecure default",
+            );
             let mut sessions =
                 xchat_core::session::load_sessions_encrypted(&session_path, &storage_key)
                     .unwrap_or_default();
@@ -718,8 +719,9 @@ async fn main() -> anyhow::Result<()> {
             let mut keystore =
                 KeyStore::load_or_generate(&keystore_path).unwrap_or_else(|_| KeyStore::generate());
             let session_path = keystore_path.with_file_name(".xchat_sessions.bin");
-            let storage_key = KeyStore::get_or_create_device_storage_key()
-                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+            let storage_key = KeyStore::get_or_create_device_storage_key().expect(
+                "Failed to obtain device storage key; refusing fallback to insecure default",
+            );
             let mut sessions =
                 xchat_core::session::load_sessions_encrypted(&session_path, &storage_key)
                     .unwrap_or_default();

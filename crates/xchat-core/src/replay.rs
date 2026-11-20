@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    fs::{self, File},
-    io::{Read, Write},
-    path::Path,
-};
+use std::{collections::HashMap, fs::File, io::Read, path::Path};
 
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -51,15 +46,12 @@ impl ReplayFilter {
         self.seen_messages.len()
     }
 
-    /// Persist the replay filter encrypted with ChaCha20-Poly1305 and a CSPRNG nonce to disk.
+    /// Persist the replay filter encrypted with ChaCha20-Poly1305 and 0600 permissions to disk.
     pub fn save_to_disk_encrypted(
         &self,
         path: &Path,
         encryption_key: &[u8; 32],
     ) -> Result<(), CoreError> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        }
         let serialized =
             bincode::serialize(self).map_err(|e| CoreError::StorageError(e.to_string()))?;
         let mut nonce = [0u8; 12];
@@ -76,10 +68,7 @@ impl ReplayFilter {
         output.extend_from_slice(&nonce);
         output.extend_from_slice(&ciphertext);
 
-        let mut file = File::create(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        file.write_all(&output)
-            .map_err(|e| CoreError::StorageError(e.to_string()))?;
-        Ok(())
+        crate::keystore::KeyStore::write_secure_file(path, &output)
     }
 
     /// Restore the replay filter from an encrypted disk file using ChaCha20-Poly1305.
@@ -168,6 +157,17 @@ mod tests {
 
         // Save to disk encrypted
         filter.save_to_disk_encrypted(path, &key).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(path).unwrap();
+            assert_eq!(
+                meta.permissions().mode() & 0o777,
+                0o600,
+                "Replay filter file must be created with 0600 permissions"
+            );
+        }
 
         // Restore from disk encrypted
         let mut loaded = ReplayFilter::load_from_disk_encrypted(path, &key).unwrap();

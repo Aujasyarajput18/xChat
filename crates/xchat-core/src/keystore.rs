@@ -230,7 +230,7 @@ impl KeyStore {
 
     /// Derive or retrieve a secure per-device encryption key.
     /// Priority:
-    /// 1. `XCHAT_PASSPHRASE` environment variable (derived using HKDF-SHA256)
+    /// 1. `XCHAT_PASSPHRASE` environment variable (derived using Argon2id with random stored salt)
     /// 2. `XCHAT_STORAGE_KEY` environment variable (hex-encoded 32-byte key)
     /// 3. Secure random key saved in `path.with_file_name(".xchat_device_key")` or `~/.xchat_device_key` with 0600 mode
     pub fn get_or_create_device_storage_key_for_path(
@@ -238,12 +238,37 @@ impl KeyStore {
     ) -> Result<[u8; 32], CoreError> {
         if let Ok(pass) = std::env::var("XCHAT_PASSPHRASE") {
             if !pass.trim().is_empty() {
-                let hk = hkdf::Hkdf::<sha2::Sha256>::new(
-                    Some(b"xchat-keystore-passphrase-salt-v1"),
-                    pass.as_bytes(),
-                );
+                let salt_path = if let Ok(custom) = std::env::var("XCHAT_SALT_PATH") {
+                    PathBuf::from(custom)
+                } else if let Some(p) = path {
+                    p.with_file_name(".xchat_keystore.salt")
+                } else if let Ok(home) = std::env::var("HOME") {
+                    PathBuf::from(home).join(".xchat_keystore.salt")
+                } else {
+                    PathBuf::from(".xchat_keystore.salt")
+                };
+
+                let mut salt = [0u8; 16];
+                if salt_path.exists() {
+                    if let Ok(data) = fs::read(&salt_path) {
+                        if data.len() == 16 {
+                            salt.copy_from_slice(&data);
+                        } else {
+                            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+                            let _ = Self::write_secure_file(&salt_path, &salt);
+                        }
+                    } else {
+                        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+                        let _ = Self::write_secure_file(&salt_path, &salt);
+                    }
+                } else {
+                    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+                    let _ = Self::write_secure_file(&salt_path, &salt);
+                }
+
                 let mut key = [0u8; 32];
-                hk.expand(b"xchat-device-storage-key", &mut key)
+                argon2::Argon2::default()
+                    .hash_password_into(pass.as_bytes(), &salt, &mut key)
                     .map_err(|e| {
                         CoreError::Crypto(xchat_crypto::errors::CryptoError::AeadError(
                             e.to_string(),
@@ -402,5 +427,42 @@ mod tests {
 
         assert_eq!(addr1, addr2);
         assert_eq!(ks1.signed_prekey.pubkey, ks2.signed_prekey.pubkey);
+    }
+
+    #[test]
+    fn test_passphrase_argon2id_derivation_and_salt_storage() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let salt_path = temp_dir.path().join("keystore.salt");
+
+        std::env::set_var("XCHAT_PASSPHRASE", "my_super_secret_argon2_passphrase");
+        std::env::set_var("XCHAT_SALT_PATH", salt_path.to_str().unwrap());
+
+        let key1 = KeyStore::get_or_create_device_storage_key_for_path(None).unwrap();
+        assert!(
+            salt_path.exists(),
+            "Salt file must be created on first derivation"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&salt_path).unwrap();
+            assert_eq!(
+                meta.permissions().mode() & 0o777,
+                0o600,
+                "Salt file must have 0600 permissions"
+            );
+        }
+
+        // Re-derive using the stored salt -> must produce identical key
+        let key2 = KeyStore::get_or_create_device_storage_key_for_path(None).unwrap();
+        assert_eq!(
+            key1, key2,
+            "Argon2id derivation with same salt and pass must produce identical key"
+        );
+
+        // Clean up env vars
+        std::env::remove_var("XCHAT_PASSPHRASE");
+        std::env::remove_var("XCHAT_SALT_PATH");
     }
 }
