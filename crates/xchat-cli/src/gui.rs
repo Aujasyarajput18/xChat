@@ -611,118 +611,138 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
 
     println!("Ready to handle messages. Press Ctrl+C to close.");
 
-    while let Ok((mut socket, _)) = listener.accept().await {
+    run_server_loop(listener, state, local_ip).await
+}
+
+pub async fn run_server_loop(
+    listener: TcpListener,
+    state: Arc<Mutex<AppState>>,
+    local_ip: String,
+) -> anyhow::Result<()> {
+    while let Ok((socket, _)) = listener.accept().await {
         let state_clone = state.clone();
         let local_ip_clone = local_ip.clone();
 
         tokio::spawn(async move {
-            let mut buf = Vec::new();
-            let mut temp = [0u8; 2048];
-            let mut content_length = 0;
-            let mut header_end = None;
+            handle_http_connection(socket, state_clone, local_ip_clone).await;
+        });
+    }
 
-            loop {
-                match socket.read(&mut temp).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        buf.extend_from_slice(&temp[..n]);
-                        if header_end.is_none() {
-                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                                header_end = Some(pos + 4);
-                                let header_str = String::from_utf8_lossy(&buf[..pos]);
-                                for line in header_str.lines() {
-                                    if line.to_lowercase().starts_with("content-length:") {
-                                        if let Ok(len) = line[15..].trim().parse::<usize>() {
-                                            content_length = len;
-                                        }
-                                    }
+    Ok(())
+}
+
+pub async fn handle_http_connection<S>(
+    mut socket: S,
+    state_clone: Arc<Mutex<AppState>>,
+    local_ip_clone: String,
+) where
+    S: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static,
+{
+    let mut buf = Vec::new();
+    let mut temp = [0u8; 2048];
+    let mut content_length = 0;
+    let mut header_end = None;
+
+    loop {
+        match socket.read(&mut temp).await {
+            Ok(0) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&temp[..n]);
+                if header_end.is_none() {
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        header_end = Some(pos + 4);
+                        let header_str = String::from_utf8_lossy(&buf[..pos]);
+                        for line in header_str.lines() {
+                            if line.to_lowercase().starts_with("content-length:") {
+                                if let Ok(len) = line[15..].trim().parse::<usize>() {
+                                    content_length = len;
                                 }
                             }
                         }
-                        if let Some(hend) = header_end {
-                            if buf.len() >= hend + content_length {
-                                break;
-                            }
-                        }
                     }
-                    Err(_) => break,
+                }
+                if let Some(hend) = header_end {
+                    if buf.len() >= hend + content_length {
+                        break;
+                    }
                 }
             }
+            Err(_) => break,
+        }
+    }
 
-            if buf.is_empty() {
-                return;
-            }
+    if buf.is_empty() {
+        return;
+    }
 
-            let req_str = String::from_utf8_lossy(&buf);
-            let first_line = req_str.lines().next().unwrap_or("");
-            let parts: Vec<&str> = first_line.split_whitespace().collect();
-            let method = parts.first().copied().unwrap_or("GET");
-            let path = parts.get(1).copied().unwrap_or("/");
+    let req_str = String::from_utf8_lossy(&buf);
+    let first_line = req_str.lines().next().unwrap_or("");
+    let parts: Vec<&str> = first_line.split_whitespace().collect();
+    let method = parts.first().copied().unwrap_or("GET");
+    let path = parts.get(1).copied().unwrap_or("/");
 
-            let body = if let Some(hend) = header_end {
-                if buf.len() >= hend {
-                    String::from_utf8_lossy(&buf[hend..]).to_string()
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
+    let body = if let Some(hend) = header_end {
+        if buf.len() >= hend {
+            String::from_utf8_lossy(&buf[hend..]).to_string()
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
 
-            let mut headers = HashMap::new();
-            for line in req_str.lines().skip(1) {
-                if line.is_empty() || line == "\r" {
-                    break;
-                }
-                if let Some((k, v)) = line.split_once(':') {
-                    headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
-                }
-            }
+    let mut headers = HashMap::new();
+    for line in req_str.lines().skip(1) {
+        if line.is_empty() || line == "\r" {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+        }
+    }
 
-            let local_ip_val = {
-                let st = state_clone.lock().unwrap();
-                st.local_ip.clone()
-            };
+    let local_ip_val = {
+        let st = state_clone.lock().unwrap();
+        st.local_ip.clone()
+    };
 
-            // DNS Rebinding protection: validate Host header
-            let host = headers.get("host").map(|s| s.as_str()).unwrap_or("");
-            let is_valid_host = host.is_empty()
-                || host.starts_with("localhost")
-                || host.starts_with("127.0.0.1")
-                || host.starts_with("0.0.0.0")
-                || host.starts_with("[::1]")
-                || host.starts_with(&format!("{}:", local_ip_val))
-                || host == local_ip_val;
-            if !is_valid_host {
-                let resp =
-                    "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid Host Header";
-                let _ = socket.write_all(resp.as_bytes()).await;
-                return;
-            }
+    // DNS Rebinding protection: validate Host header
+    let host = headers.get("host").map(|s| s.as_str()).unwrap_or("");
+    let is_valid_host = host.is_empty()
+        || host.starts_with("localhost")
+        || host.starts_with("127.0.0.1")
+        || host.starts_with("0.0.0.0")
+        || host.starts_with("[::1]")
+        || host.starts_with(&format!("{}:", local_ip_val))
+        || host == local_ip_val;
+    if !is_valid_host {
+        let resp = "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid Host Header";
+        let _ = socket.write_all(resp.as_bytes()).await;
+        return;
+    }
 
-            // Origin validation: block cross-origin requests from arbitrary websites
-            let origin_header = headers.get("origin").cloned();
-            let is_valid_origin = match &origin_header {
-                Some(orig) => {
-                    orig.starts_with("http://localhost")
-                        || orig.starts_with("http://127.0.0.1")
-                        || orig.starts_with(&format!("http://{}:", local_ip_val))
-                        || orig == "null"
-                }
-                None => true,
-            };
-            let is_peer_route = path == "/api/identity"
-                || path == "/api/bundle"
-                || path == "/api/prekey"
-                || path == "/api/receive";
-            if !is_valid_origin && !is_peer_route {
-                let resp =
-                    "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nCross-Origin Forbidden";
-                let _ = socket.write_all(resp.as_bytes()).await;
-                return;
-            }
+    // Origin validation: block cross-origin requests from arbitrary websites
+    let origin_header = headers.get("origin").cloned();
+    let is_valid_origin = match &origin_header {
+        Some(orig) => {
+            orig.starts_with("http://localhost")
+                || orig.starts_with("http://127.0.0.1")
+                || orig.starts_with(&format!("http://{}:", local_ip_val))
+                || orig == "null"
+        }
+        None => true,
+    };
+    let is_peer_route = path == "/api/identity"
+        || path == "/api/bundle"
+        || path == "/api/prekey"
+        || path == "/api/receive";
+    if !is_valid_origin && !is_peer_route {
+        let resp = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nCross-Origin Forbidden";
+        let _ = socket.write_all(resp.as_bytes()).await;
+        return;
+    }
 
-            let cors_headers = match &origin_header {
+    let cors_headers = match &origin_header {
                 Some(orig) if is_valid_origin => format!(
                     "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-XChat-Token\r\n",
                     orig
@@ -730,356 +750,285 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                 _ => String::new(),
             };
 
-            if method == "OPTIONS" {
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Length: 0\r\nConnection: close\r\n\r\n",
-                    cors_headers
-                );
-                let _ = socket.write_all(resp.as_bytes()).await;
-                return;
-            }
+    if method == "OPTIONS" {
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\n{}Content-Length: 0\r\nConnection: close\r\n\r\n",
+            cors_headers
+        );
+        let _ = socket.write_all(resp.as_bytes()).await;
+        return;
+    }
 
-            // CSRF Token verification on all UI /api/* routes
-            if path.starts_with("/api/") && !is_peer_route {
-                let token = headers
-                    .get("x-xchat-token")
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                let expected = {
-                    let st = state_clone.lock().unwrap();
-                    st.csrf_token.clone()
-                };
-                if token != expected {
-                    let resp = json_response(
-                        "401 Unauthorized",
-                        r#"{"error":"Unauthorized: Missing or invalid CSRF token"}"#,
-                        &cors_headers,
-                    );
-                    let _ = socket.write_all(resp.as_bytes()).await;
-                    return;
-                }
-            }
+    // CSRF Token verification on all UI /api/* routes
+    if path.starts_with("/api/") && !is_peer_route {
+        let token = headers
+            .get("x-xchat-token")
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let expected = {
+            let st = state_clone.lock().unwrap();
+            st.csrf_token.clone()
+        };
+        if token != expected {
+            let resp = json_response(
+                "401 Unauthorized",
+                r#"{"error":"Unauthorized: Missing or invalid CSRF token"}"#,
+                &cors_headers,
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            return;
+        }
+    }
 
-            if path == "/api/identity" {
-                let (username, display_name, sign_pubkey, dh_pubkey, cur_addr, cur_fp, cur_vfp) = {
-                    let st = state_clone.lock().unwrap();
-                    let pk = st.keystore.identity.public_key();
-                    (
-                        st.profile.username.clone(),
-                        st.profile.display_name.clone(),
-                        hex::encode(pk.sign_pubkey),
-                        hex::encode(pk.dh_pubkey),
-                        pk.address(),
-                        pk.fingerprint(),
-                        pk.visual_fingerprint(),
-                    )
-                };
-                let json = serde_json::to_string(&serde_json::json!({
-                    "address": cur_addr,
-                    "fingerprint": cur_fp,
-                    "sign_pubkey": sign_pubkey,
-                    "dh_pubkey": dh_pubkey,
-                    "visual_fingerprint": cur_vfp,
-                    "username": username,
-                    "display_name": display_name,
-                    "ip": local_ip_clone,
-                    "port": port,
-                    "status": "online"
-                }))
-                .unwrap_or_else(|_| "{}".to_string());
-                let resp = json_response("200 OK", &json, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/keygen" && method == "POST" {
-                let (new_addr, new_fp, new_visual, sign_pub, dh_pub, bundle_val) = {
-                    let mut st = state_clone.lock().unwrap();
-                    let mut new_ks = KeyStore::generate();
-                    let new_pk = new_ks.identity.public_key();
-                    let addr = new_pk.address();
-                    let fp = new_pk.fingerprint();
-                    let vfp = new_pk.visual_fingerprint();
-                    let spk = hex::encode(new_pk.sign_pubkey);
-                    let dpk = hex::encode(new_pk.dh_pubkey);
-                    let bundle = new_ks.export_bundle();
+    if path == "/api/identity" {
+        let (username, display_name, sign_pubkey, dh_pubkey, cur_addr, cur_fp, cur_vfp, local_port) = {
+            let st = state_clone.lock().unwrap();
+            let pk = st.keystore.identity.public_key();
+            (
+                st.profile.username.clone(),
+                st.profile.display_name.clone(),
+                hex::encode(pk.sign_pubkey),
+                hex::encode(pk.dh_pubkey),
+                pk.address(),
+                pk.fingerprint(),
+                pk.visual_fingerprint(),
+                st.local_port,
+            )
+        };
+        let json = serde_json::to_string(&serde_json::json!({
+            "address": cur_addr,
+            "fingerprint": cur_fp,
+            "sign_pubkey": sign_pubkey,
+            "dh_pubkey": dh_pubkey,
+            "visual_fingerprint": cur_vfp,
+            "username": username,
+            "display_name": display_name,
+            "ip": local_ip_clone,
+            "port": local_port,
+            "status": "online"
+        }))
+        .unwrap_or_else(|_| "{}".to_string());
+        let resp = json_response("200 OK", &json, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/keygen" && method == "POST" {
+        let (new_addr, new_fp, new_visual, sign_pub, dh_pub, bundle_val) = {
+            let mut st = state_clone.lock().unwrap();
+            let mut new_ks = KeyStore::generate();
+            let new_pk = new_ks.identity.public_key();
+            let addr = new_pk.address();
+            let fp = new_pk.fingerprint();
+            let vfp = new_pk.visual_fingerprint();
+            let spk = hex::encode(new_pk.sign_pubkey);
+            let dpk = hex::encode(new_pk.dh_pubkey);
+            let bundle = new_ks.export_bundle();
 
-                    let ks_path = get_keystore_path();
-                    let _ = new_ks.save_to_path(&ks_path);
+            let ks_path = get_keystore_path();
+            let _ = new_ks.save_to_path(&ks_path);
 
-                    st.profile.address = addr.clone();
-                    st.profile.fingerprint = fp.clone();
-                    let ppath = get_profile_path();
-                    let _ = st.profile.save_to_disk(&ppath);
+            st.profile.address = addr.clone();
+            st.profile.fingerprint = fp.clone();
+            let ppath = get_profile_path();
+            let _ = st.profile.save_to_disk(&ppath);
 
-                    st.keystore = new_ks;
-                    (
-                        addr,
-                        fp,
-                        vfp,
-                        spk,
-                        dpk,
-                        serde_json::to_value(&bundle).unwrap_or_default(),
-                    )
-                };
+            st.keystore = new_ks;
+            (
+                addr,
+                fp,
+                vfp,
+                spk,
+                dpk,
+                serde_json::to_value(&bundle).unwrap_or_default(),
+            )
+        };
 
-                let resp_body = serde_json::to_string(&serde_json::json!({
-                    "status": "generated",
-                    "address": new_addr,
-                    "fingerprint": new_fp,
-                    "visual_fingerprint": new_visual,
-                    "sign_pubkey": sign_pub,
-                    "dh_pubkey": dh_pub,
-                    "prekey_bundle": bundle_val
-                }))
-                .unwrap_or_else(|_| "{}".to_string());
+        let resp_body = serde_json::to_string(&serde_json::json!({
+            "status": "generated",
+            "address": new_addr,
+            "fingerprint": new_fp,
+            "visual_fingerprint": new_visual,
+            "sign_pubkey": sign_pub,
+            "dh_pubkey": dh_pub,
+            "prekey_bundle": bundle_val
+        }))
+        .unwrap_or_else(|_| "{}".to_string());
 
-                let resp = json_response("200 OK", &resp_body, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if (path == "/api/bundle" || path == "/api/prekey") && method == "GET" {
-                let bundle_json = {
-                    let mut st = state_clone.lock().unwrap();
-                    let bundle = st.keystore.export_bundle();
-                    serde_json::to_string(&bundle).unwrap_or_else(|_| "{}".to_string())
-                };
-                let resp = json_response("200 OK", &bundle_json, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/profile" && method == "GET" {
-                let (profile, reachable, invite_url, cur_vfp) = {
-                    let st = state_clone.lock().unwrap();
-                    let sock = format!("{}:{}", st.local_ip, st.local_port);
-                    let invite = st.profile.generate_invite_url(&sock);
-                    let vfp = st.keystore.identity.public_key().visual_fingerprint();
-                    (st.profile.clone(), sock, invite, vfp)
-                };
-                let json = serde_json::to_string(&serde_json::json!({
-                    "username": profile.username,
-                    "display_name": profile.display_name,
-                    "bio": profile.bio,
-                    "avatar_color": profile.avatar_color,
-                    "address": profile.address,
-                    "fingerprint": profile.fingerprint,
-                    "visual_fingerprint": cur_vfp,
-                    "reachable": reachable,
-                    "invite_url": invite_url
-                }))
-                .unwrap_or_else(|_| "{}".to_string());
-                let resp = json_response("200 OK", &json, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/profile" && method == "POST" {
-                #[derive(Deserialize)]
-                struct UpdateProfileReq {
-                    username: Option<String>,
-                    display_name: Option<String>,
-                    bio: Option<String>,
-                    avatar_color: Option<serde_json::Value>,
-                }
-                if let Ok(req) = serde_json::from_str::<UpdateProfileReq>(&body) {
-                    let mut st = state_clone.lock().unwrap();
-                    if let Some(u) = req.username {
-                        if let Ok(clean) = UserProfile::validate_and_normalize_username(&u) {
-                            st.profile.username = clean;
-                        } else if !u.trim().is_empty() {
-                            let clean = if u.trim().starts_with('@') {
-                                u.trim().to_lowercase()
-                            } else {
-                                format!("@{}", u.trim().to_lowercase())
-                            };
-                            st.profile.username = clean;
-                        }
-                    }
-                    if let Some(dn) = req.display_name {
-                        if !dn.trim().is_empty() {
-                            st.profile.display_name = dn.trim().to_string();
-                        }
-                    }
-                    if let Some(b) = req.bio {
-                        st.profile.bio = b;
-                    }
-                    if let Some(ac) = req.avatar_color {
-                        let color_str = match ac {
-                            serde_json::Value::Number(n) => n.to_string(),
-                            serde_json::Value::String(s) => s,
-                            _ => "0".to_string(),
-                        };
-                        st.profile.avatar_color = color_str;
-                    }
-                    let ppath = get_profile_path();
-                    let _ = st.profile.save_to_disk(&ppath);
-                }
-                let resp = json_response("200 OK", r#"{"status":"updated"}"#, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/discovered" && method == "GET" {
-                let peers_json = {
-                    let st = state_clone.lock().unwrap();
-                    let my_addr = st.keystore.identity.public_key().address();
-                    let my_username = st.profile.username.to_lowercase();
-                    let my_local_sock = format!("{}:{}", st.local_ip, st.local_port);
-
-                    let mut peers: Vec<serde_json::Value> = st
-                        .discovery
-                        .get_active_peers()
-                        .into_iter()
-                        .filter(|p| {
-                            p.address != my_addr
-                                && p.username.to_lowercase() != my_username
-                                && p.socket_addr != my_local_sock
-                        })
-                        .map(|p| {
-                            let (ip, port) = if let Some((h, prt)) = p.socket_addr.split_once(':') {
-                                (h.to_string(), prt.parse::<u16>().unwrap_or(8080))
-                            } else {
-                                (p.socket_addr.clone(), 8080)
-                            };
-                            serde_json::json!({
-                                "username": p.username,
-                                "display_name": p.display_name,
-                                "address": p.address,
-                                "fingerprint": p.fingerprint,
-                                "socket_addr": p.socket_addr,
-                                "ip": ip,
-                                "port": port,
-                                "transport": p.transport_type,
-                                "discovered_at": p.discovered_at,
-                            })
-                        })
-                        .collect();
-
-                    let ble_devs = st.ble_transport.get_discovered_devices();
-                    for b in ble_devs {
-                        if b.address != my_addr {
-                            let uname = b.username.clone().unwrap_or_else(|| {
-                                format!("@{}", b.name.to_lowercase().replace(' ', "_"))
-                            });
-                            peers.push(serde_json::json!({
-                                "username": uname,
-                                "display_name": b.name,
-                                "address": b.address,
-                                "fingerprint": b.id,
-                                "socket_addr": format!("ble:{}", b.address),
-                                "ip": b.address,
-                                "port": 0,
-                                "transport": "ble",
-                                "rssi": b.rssi,
-                                "last_seen": b.last_seen * 1000
-                            }));
-                        }
-                    }
-
-                    serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_string())
-                };
-                let resp = json_response("200 OK", &peers_json, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/connect_username" && method == "POST" {
-                #[derive(Deserialize)]
-                struct ConnectUserReq {
-                    username: String,
-                }
-                let mut found = None;
-                if let Ok(req) = serde_json::from_str::<ConnectUserReq>(&body) {
-                    let st = state_clone.lock().unwrap();
-                    found = st.discovery.resolve_username(&req.username);
-                }
-                let resp_body = if let Some(peer) = found {
-                    serde_json::to_string(&peer).unwrap_or_else(|_| "{}".to_string())
-                } else {
-                    r#"{"error":"Username not found on local mesh"}"#.to_string()
-                };
-                let resp = json_response("200 OK", &resp_body, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/burner/join" && method == "POST" {
-                #[derive(Deserialize)]
-                struct JoinBurnerReq {
-                    room: String,
-                    pass: String,
-                }
-                if let Ok(req) = serde_json::from_str::<JoinBurnerReq>(&body) {
-                    let resp_body = {
-                        let mut st = state_clone.lock().unwrap();
-                        let burner = xchat_core::burner::BurnerRoom::new(&req.room, &req.pass, 600);
-                        let token = burner.routing_token();
-                        let room_alias = format!("#{}", req.room);
-                        st.burner_rooms.insert(room_alias.clone(), burner);
-
-                        if !st.contacts.iter().any(|c| c.alias == room_alias) {
-                            st.contacts.push(ContactEntry {
-                                alias: room_alias.clone(),
-                                address: format!("burner_{}", hex::encode(token)),
-                                target: "burner".to_string(),
-                                status: "Burner Room (RAM-only)".to_string(),
-                                last_message: "Joined room. Messages auto-destruct.".to_string(),
-                                last_time: get_now_time_string(),
-                            });
-                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
-                                Some(&st.session_store_path),
-                            )
-                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                            let _ = save_contacts_encrypted(
-                                &st.contacts,
-                                &st.contacts_store_path,
-                                &storage_key,
-                            );
-                        }
-
-                        serde_json::to_string(&serde_json::json!({
-                            "status": "joined",
-                            "room": req.room,
-                            "alias": room_alias,
-                            "token": hex::encode(token),
-                        }))
-                        .unwrap_or_default()
-                    };
-                    let resp = json_response("200 OK", &resp_body, &cors_headers);
-                    let _ = socket.write_all(resp.as_bytes()).await;
-                    return;
-                }
-                let resp = json_response(
-                    "400 Bad Request",
-                    r#"{"error":"Invalid burner room request"}"#,
-                    &cors_headers,
-                );
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/contacts" && method == "GET" {
-                let contacts_json = {
-                    let st = state_clone.lock().unwrap();
-                    serde_json::to_string(&st.contacts).unwrap_or_else(|_| "[]".to_string())
-                };
-                let resp = json_response("200 OK", &contacts_json, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/contacts" && method == "POST" {
-                #[allow(dead_code)]
-                #[derive(Deserialize)]
-                struct AddContactReq {
-                    alias: String,
-                    target: Option<String>,
-                    bundle: Option<String>,
-                    fingerprint: Option<String>,
-                    address: Option<String>,
-                }
-                if let Ok(req) = serde_json::from_str::<AddContactReq>(&body) {
-                    let target_str = req.target.unwrap_or_default();
-                    let mut st = state_clone.lock().unwrap();
-                    if let Some(existing) = st
-                        .contacts
-                        .iter_mut()
-                        .find(|c| c.alias.eq_ignore_ascii_case(&req.alias))
-                    {
-                        if !target_str.is_empty() {
-                            existing.target = target_str;
-                        }
+        let resp = json_response("200 OK", &resp_body, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if (path == "/api/bundle" || path == "/api/prekey") && method == "GET" {
+        let bundle_json = {
+            let mut st = state_clone.lock().unwrap();
+            let bundle = st.keystore.export_bundle();
+            serde_json::to_string(&bundle).unwrap_or_else(|_| "{}".to_string())
+        };
+        let resp = json_response("200 OK", &bundle_json, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/profile" && method == "GET" {
+        let (profile, reachable, invite_url, cur_vfp) = {
+            let st = state_clone.lock().unwrap();
+            let sock = format!("{}:{}", st.local_ip, st.local_port);
+            let invite = st.profile.generate_invite_url(&sock);
+            let vfp = st.keystore.identity.public_key().visual_fingerprint();
+            (st.profile.clone(), sock, invite, vfp)
+        };
+        let json = serde_json::to_string(&serde_json::json!({
+            "username": profile.username,
+            "display_name": profile.display_name,
+            "bio": profile.bio,
+            "avatar_color": profile.avatar_color,
+            "address": profile.address,
+            "fingerprint": profile.fingerprint,
+            "visual_fingerprint": cur_vfp,
+            "reachable": reachable,
+            "invite_url": invite_url
+        }))
+        .unwrap_or_else(|_| "{}".to_string());
+        let resp = json_response("200 OK", &json, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/profile" && method == "POST" {
+        #[derive(Deserialize)]
+        struct UpdateProfileReq {
+            username: Option<String>,
+            display_name: Option<String>,
+            bio: Option<String>,
+            avatar_color: Option<serde_json::Value>,
+        }
+        if let Ok(req) = serde_json::from_str::<UpdateProfileReq>(&body) {
+            let mut st = state_clone.lock().unwrap();
+            if let Some(u) = req.username {
+                if let Ok(clean) = UserProfile::validate_and_normalize_username(&u) {
+                    st.profile.username = clean;
+                } else if !u.trim().is_empty() {
+                    let clean = if u.trim().starts_with('@') {
+                        u.trim().to_lowercase()
                     } else {
-                        let addr = req.address.unwrap_or_else(|| {
-                            format!(
-                                "xchat_{}",
-                                hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
-                            )
-                        });
-                        st.contacts.push(ContactEntry {
-                            alias: req.alias.clone(),
-                            address: addr,
-                            target: target_str,
-                            status: "Connected".to_string(),
-                            last_message: "Tap to chat".to_string(),
-                            last_time: get_now_time_string(),
-                        });
-                    }
+                        format!("@{}", u.trim().to_lowercase())
+                    };
+                    st.profile.username = clean;
+                }
+            }
+            if let Some(dn) = req.display_name {
+                if !dn.trim().is_empty() {
+                    st.profile.display_name = dn.trim().to_string();
+                }
+            }
+            if let Some(b) = req.bio {
+                st.profile.bio = b;
+            }
+            if let Some(ac) = req.avatar_color {
+                let color_str = match ac {
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s,
+                    _ => "0".to_string(),
+                };
+                st.profile.avatar_color = color_str;
+            }
+            let ppath = get_profile_path();
+            let _ = st.profile.save_to_disk(&ppath);
+        }
+        let resp = json_response("200 OK", r#"{"status":"updated"}"#, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/discovered" && method == "GET" {
+        let peers_json = {
+            let st = state_clone.lock().unwrap();
+            let my_addr = st.keystore.identity.public_key().address();
+            let my_username = st.profile.username.to_lowercase();
+            let my_local_sock = format!("{}:{}", st.local_ip, st.local_port);
+
+            let mut peers: Vec<serde_json::Value> = st
+                .discovery
+                .get_active_peers()
+                .into_iter()
+                .filter(|p| {
+                    p.address != my_addr
+                        && p.username.to_lowercase() != my_username
+                        && p.socket_addr != my_local_sock
+                })
+                .map(|p| {
+                    let (ip, port) = if let Some((h, prt)) = p.socket_addr.split_once(':') {
+                        (h.to_string(), prt.parse::<u16>().unwrap_or(8080))
+                    } else {
+                        (p.socket_addr.clone(), 8080)
+                    };
+                    serde_json::json!({
+                        "username": p.username,
+                        "display_name": p.display_name,
+                        "address": p.address,
+                        "fingerprint": p.fingerprint,
+                        "socket_addr": p.socket_addr,
+                        "ip": ip,
+                        "port": port,
+                        "transport": p.transport_type,
+                        "discovered_at": p.discovered_at,
+                    })
+                })
+                .collect();
+
+            let ble_devs = st.ble_transport.get_discovered_devices();
+            for b in ble_devs {
+                if b.address != my_addr {
+                    let uname = b
+                        .username
+                        .clone()
+                        .unwrap_or_else(|| format!("@{}", b.name.to_lowercase().replace(' ', "_")));
+                    peers.push(serde_json::json!({
+                        "username": uname,
+                        "display_name": b.name,
+                        "address": b.address,
+                        "fingerprint": b.id,
+                        "socket_addr": format!("ble:{}", b.address),
+                        "ip": b.address,
+                        "port": 0,
+                        "transport": "ble",
+                        "rssi": b.rssi,
+                        "last_seen": b.last_seen * 1000
+                    }));
+                }
+            }
+
+            serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_string())
+        };
+        let resp = json_response("200 OK", &peers_json, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/connect_username" && method == "POST" {
+        #[derive(Deserialize)]
+        struct ConnectUserReq {
+            username: String,
+        }
+        let mut found = None;
+        if let Ok(req) = serde_json::from_str::<ConnectUserReq>(&body) {
+            let st = state_clone.lock().unwrap();
+            found = st.discovery.resolve_username(&req.username);
+        }
+        let resp_body = if let Some(peer) = found {
+            serde_json::to_string(&peer).unwrap_or_else(|_| "{}".to_string())
+        } else {
+            r#"{"error":"Username not found on local mesh"}"#.to_string()
+        };
+        let resp = json_response("200 OK", &resp_body, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/burner/join" && method == "POST" {
+        #[derive(Deserialize)]
+        struct JoinBurnerReq {
+            room: String,
+            pass: String,
+        }
+        if let Ok(req) = serde_json::from_str::<JoinBurnerReq>(&body) {
+            let resp_body = {
+                let mut st = state_clone.lock().unwrap();
+                let burner = xchat_core::burner::BurnerRoom::new(&req.room, &req.pass, 600);
+                let token = burner.routing_token();
+                let room_alias = format!("#{}", req.room);
+                st.burner_rooms.insert(room_alias.clone(), burner);
+
+                if !st.contacts.iter().any(|c| c.alias == room_alias) {
+                    st.contacts.push(ContactEntry {
+                        alias: room_alias.clone(),
+                        address: format!("burner_{}", hex::encode(token)),
+                        target: "burner".to_string(),
+                        status: "Burner Room (RAM-only)".to_string(),
+                        last_message: "Joined room. Messages auto-destruct.".to_string(),
+                        last_time: get_now_time_string(),
+                    });
                     let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
                         &st.session_store_path,
                     ))
@@ -1090,102 +1039,361 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                         &storage_key,
                     );
                 }
-                let resp = json_response("200 OK", r#"{"status":"added"}"#, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/send" && method == "POST" {
-                #[derive(Deserialize)]
-                struct SendReq {
-                    alias: String,
-                    target: Option<String>,
-                    text: String,
+
+                serde_json::to_string(&serde_json::json!({
+                    "status": "joined",
+                    "room": req.room,
+                    "alias": room_alias,
+                    "token": hex::encode(token),
+                }))
+                .unwrap_or_default()
+            };
+            let resp = json_response("200 OK", &resp_body, &cors_headers);
+            let _ = socket.write_all(resp.as_bytes()).await;
+            return;
+        }
+        let resp = json_response(
+            "400 Bad Request",
+            r#"{"error":"Invalid burner room request"}"#,
+            &cors_headers,
+        );
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/contacts" && method == "GET" {
+        let contacts_json = {
+            let st = state_clone.lock().unwrap();
+            serde_json::to_string(&st.contacts).unwrap_or_else(|_| "[]".to_string())
+        };
+        let resp = json_response("200 OK", &contacts_json, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/contacts" && method == "POST" {
+        #[allow(dead_code)]
+        #[derive(Deserialize)]
+        struct AddContactReq {
+            alias: String,
+            target: Option<String>,
+            bundle: Option<String>,
+            fingerprint: Option<String>,
+            address: Option<String>,
+        }
+        if let Ok(req) = serde_json::from_str::<AddContactReq>(&body) {
+            let target_str = req.target.unwrap_or_default();
+            let mut st = state_clone.lock().unwrap();
+            if let Some(existing) = st
+                .contacts
+                .iter_mut()
+                .find(|c| c.alias.eq_ignore_ascii_case(&req.alias))
+            {
+                if !target_str.is_empty() {
+                    existing.target = target_str;
                 }
-                if let Ok(req) = serde_json::from_str::<SendReq>(&body) {
-                    let now_str = get_now_time_string();
-                    let now_ts = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
+            } else {
+                let addr = req.address.unwrap_or_else(|| {
+                    format!(
+                        "xchat_{}",
+                        hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
+                    )
+                });
+                st.contacts.push(ContactEntry {
+                    alias: req.alias.clone(),
+                    address: addr,
+                    target: target_str,
+                    status: "Connected".to_string(),
+                    last_message: "Tap to chat".to_string(),
+                    last_time: get_now_time_string(),
+                });
+            }
+            let storage_key =
+                KeyStore::get_or_create_device_storage_key_for_path(Some(&st.session_store_path))
+                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+            let _ = save_contacts_encrypted(&st.contacts, &st.contacts_store_path, &storage_key);
+        }
+        let resp = json_response("200 OK", r#"{"status":"added"}"#, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/send" && method == "POST" {
+        #[derive(Deserialize)]
+        struct SendReq {
+            alias: String,
+            target: Option<String>,
+            text: String,
+        }
+        if let Ok(req) = serde_json::from_str::<SendReq>(&body) {
+            let now_str = get_now_time_string();
+            let now_ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
 
-                    let msg = ChatMessage {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        sender: "self".to_string(),
-                        text: req.text.clone(),
-                        time: now_str.clone(),
-                        status: "sent".to_string(),
+            let msg = ChatMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                sender: "self".to_string(),
+                text: req.text.clone(),
+                time: now_str.clone(),
+                status: "sent".to_string(),
+            };
+
+            let (target_opt, my_handle, my_addr, my_ip, my_port) = {
+                let mut st = state_clone.lock().unwrap();
+                let hist = st.messages.entry(req.alias.clone()).or_default();
+                hist.push(msg.clone());
+
+                // Cross-record outgoing message to linked address/target if known
+                let mut linked_aliases = Vec::new();
+                if let Some(c) = st.contacts.iter().find(|c| c.alias == req.alias) {
+                    if !c.address.is_empty() && c.address != req.alias {
+                        linked_aliases.push(c.address.clone());
+                    }
+                    if !c.target.is_empty() && c.target != req.alias && c.target != "local" {
+                        linked_aliases.push(c.target.clone());
+                    }
+                }
+                for link in linked_aliases {
+                    st.messages.entry(link).or_default().push(msg.clone());
+                }
+
+                let mut resolved_target = req.target.clone();
+                if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == req.alias) {
+                    c.last_message = req.text.clone();
+                    c.last_time = now_str.clone();
+                    if (resolved_target.is_none()
+                        || resolved_target.as_deref() == Some("")
+                        || resolved_target.as_deref() == Some("local"))
+                        && !c.target.is_empty()
+                        && c.target != "local"
+                    {
+                        resolved_target = Some(c.target.clone());
+                    }
+                }
+                let cur_addr = st.keystore.identity.public_key().address();
+                (
+                    resolved_target,
+                    st.profile.username.clone(),
+                    cur_addr,
+                    st.local_ip.clone(),
+                    st.local_port,
+                )
+            };
+
+            // Handle Burner Room messaging (RAM-only)
+            if target_opt.as_deref() == Some("burner") || req.alias.starts_with('#') {
+                let room_alias = if req.alias.starts_with('#') {
+                    req.alias.clone()
+                } else {
+                    format!("#{}", req.alias)
+                };
+                let (env_opt, active_peers) = {
+                    let mut st = state_clone.lock().unwrap();
+                    let peers = st.discovery.get_active_peers();
+                    let env = if let Some(burner) = st.burner_rooms.get_mut(&room_alias) {
+                        burner.post_message(&my_handle, &req.text, now_ts).ok()
+                    } else {
+                        None
                     };
+                    (env, peers)
+                };
+                if let Some(env) = env_opt {
+                    let wire = WireMessageEnvelope {
+                        envelope: env,
+                        sender_alias: Some(format!("{}:{}", room_alias, my_handle)),
+                        sender_socket: Some(format!("{}:{}", my_ip, my_port)),
+                        sender_address: Some(my_addr),
+                    };
+                    let out_body = serde_json::to_string(&wire).unwrap_or_default();
+                    for p in active_peers {
+                        let _ = dispatch_http_post(&p.socket_addr, "/api/receive", &out_body).await;
+                    }
+                    let resp = json_response(
+                        "200 OK",
+                        r#"{"status":"delivered","authenticated":true}"#,
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+            }
 
-                    let (target_opt, my_handle, my_addr, my_ip, my_port) = {
-                        let mut st = state_clone.lock().unwrap();
+            // Handle Local Assistant / Saved Messages
+            if req.alias == "xChat Assistant"
+                || (target_opt.as_deref() == Some("local") && req.alias == "Saved Messages")
+            {
+                {
+                    let mut st = state_clone.lock().unwrap();
+                    if req.alias == "xChat Assistant" {
                         let hist = st.messages.entry(req.alias.clone()).or_default();
-                        hist.push(msg.clone());
-
-                        // Cross-record outgoing message to linked address/target if known
-                        let mut linked_aliases = Vec::new();
-                        if let Some(c) = st.contacts.iter().find(|c| c.alias == req.alias) {
-                            if !c.address.is_empty() && c.address != req.alias {
-                                linked_aliases.push(c.address.clone());
-                            }
-                            if !c.target.is_empty() && c.target != req.alias && c.target != "local"
-                            {
-                                linked_aliases.push(c.target.clone());
-                            }
-                        }
-                        for link in linked_aliases {
-                            st.messages.entry(link).or_default().push(msg.clone());
-                        }
-
-                        let mut resolved_target = req.target.clone();
-                        if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == req.alias) {
-                            c.last_message = req.text.clone();
-                            c.last_time = now_str.clone();
-                            if (resolved_target.is_none()
-                                || resolved_target.as_deref() == Some("")
-                                || resolved_target.as_deref() == Some("local"))
-                                && !c.target.is_empty()
-                                && c.target != "local"
-                            {
-                                resolved_target = Some(c.target.clone());
-                            }
-                        }
-                        let cur_addr = st.keystore.identity.public_key().address();
-                        (
-                            resolved_target,
-                            st.profile.username.clone(),
-                            cur_addr,
-                            st.local_ip.clone(),
-                            st.local_port,
-                        )
+                        hist.push(ChatMessage {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            sender: "peer".to_string(),
+                            text: format!("Echo [Personal Assistant]: {}", req.text),
+                            time: get_now_time_string(),
+                            status: "delivered".to_string(),
+                        });
+                    }
+                    let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
+                        &st.session_store_path,
+                    ))
+                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    let _ = save_messages_encrypted(
+                        &st.messages,
+                        &st.messages_store_path,
+                        &storage_key,
+                    );
+                    let _ = save_contacts_encrypted(
+                        &st.contacts,
+                        &st.contacts_store_path,
+                        &storage_key,
+                    );
+                }
+                let resp = json_response(
+                    "200 OK",
+                    r#"{"status":"delivered","authenticated":true}"#,
+                    &cors_headers,
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                return;
+            } else if let Some(target) = target_opt {
+                if !target.is_empty() && target != "local" {
+                    // Find contact info (address) if known
+                    let contact_addr = {
+                        let st = state_clone.lock().unwrap();
+                        st.contacts
+                            .iter()
+                            .find(|c| c.alias == req.alias || c.target == target)
+                            .map(|c| c.address.clone())
                     };
 
-                    // Handle Burner Room messaging (RAM-only)
-                    if target_opt.as_deref() == Some("burner") || req.alias.starts_with('#') {
-                        let room_alias = if req.alias.starts_with('#') {
-                            req.alias.clone()
-                        } else {
-                            format!("#{}", req.alias)
+                    // Check if an established ratcheted session exists
+                    let mut existing_session_key = None;
+                    {
+                        let st = state_clone.lock().unwrap();
+                        if let Some(ref addr) = contact_addr {
+                            if st.sessions.contains_key(addr) {
+                                existing_session_key = Some(addr.clone());
+                            }
+                        }
+                        if existing_session_key.is_none() && st.sessions.contains_key(&target) {
+                            existing_session_key = Some(target.clone());
+                        }
+                        if existing_session_key.is_none() && st.sessions.contains_key(&req.alias) {
+                            existing_session_key = Some(req.alias.clone());
+                        }
+                    }
+
+                    let mut session_envelope = None;
+                    if let Some(skey) = existing_session_key {
+                        let mut st = state_clone.lock().unwrap();
+                        if let Some(sess) = st.sessions.get_mut(&skey) {
+                            if let Ok(env) = sess.encrypt_message(
+                                req.text.as_bytes(),
+                                DIRECT_ROUTE,
+                                now_ts,
+                                86400,
+                            ) {
+                                let storage_key =
+                                    KeyStore::get_or_create_device_storage_key_for_path(Some(
+                                        &st.session_store_path,
+                                    ))
+                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                let _ = save_sessions_encrypted(
+                                    &st.sessions,
+                                    &st.session_store_path,
+                                    &storage_key,
+                                );
+                                session_envelope = Some(env);
+                            }
+                        }
+                    }
+
+                    // If no session exists, initiate outbound session via X3DH with remote prekey bundle
+                    if session_envelope.is_none() {
+                        if let Ok(bundle_json) = dispatch_http_get(&target, "/api/bundle").await {
+                            if let Ok(bundle) = serde_json::from_str::<
+                                xchat_crypto::x3dh::PrekeyBundle,
+                            >(&bundle_json)
+                            {
+                                let mut st = state_clone.lock().unwrap();
+                                if let Ok((sess, env)) = Session::initiate_outbound(
+                                    &st.keystore,
+                                    &bundle,
+                                    req.text.as_bytes(),
+                                    DIRECT_ROUTE,
+                                    now_ts,
+                                    86400,
+                                ) {
+                                    let peer_addr = bundle.identity_key.address();
+                                    st.sessions.insert(peer_addr.clone(), sess.clone());
+                                    st.sessions.insert(target.clone(), sess);
+                                    if let Some(c) = st
+                                        .contacts
+                                        .iter_mut()
+                                        .find(|c| c.alias == req.alias || c.target == target)
+                                    {
+                                        c.address = peer_addr;
+                                    }
+                                    let storage_key =
+                                        KeyStore::get_or_create_device_storage_key_for_path(Some(
+                                            &st.session_store_path,
+                                        ))
+                                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                    let _ = save_sessions_encrypted(
+                                        &st.sessions,
+                                        &st.session_store_path,
+                                        &storage_key,
+                                    );
+                                    session_envelope = Some(env);
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(envelope) = session_envelope {
+                        let wire_envelope = WireMessageEnvelope {
+                            envelope,
+                            sender_alias: Some(my_handle),
+                            sender_socket: Some(format!("{}:{}", my_ip, my_port)),
+                            sender_address: Some(my_addr),
                         };
-                        let (env_opt, active_peers) = {
-                            let mut st = state_clone.lock().unwrap();
-                            let peers = st.discovery.get_active_peers();
-                            let env = if let Some(burner) = st.burner_rooms.get_mut(&room_alias) {
-                                burner.post_message(&my_handle, &req.text, now_ts).ok()
-                            } else {
-                                None
+                        let out_body = serde_json::to_string(&wire_envelope).unwrap_or_default();
+                        let mut delivered = false;
+                        if !target.starts_with("ble:")
+                            && target.contains(':')
+                            && !target.starts_with('@')
+                            && dispatch_http_post(&target, "/api/receive", &out_body)
+                                .await
+                                .is_ok()
+                        {
+                            delivered = true;
+                        }
+                        if !delivered {
+                            let ble_t = {
+                                let st = state_clone.lock().unwrap();
+                                st.ble_transport.clone()
                             };
-                            (env, peers)
-                        };
-                        if let Some(env) = env_opt {
-                            let wire = WireMessageEnvelope {
-                                envelope: env,
-                                sender_alias: Some(format!("{}:{}", room_alias, my_handle)),
-                                sender_socket: Some(format!("{}:{}", my_ip, my_port)),
-                                sender_address: Some(my_addr),
-                            };
-                            let out_body = serde_json::to_string(&wire).unwrap_or_default();
-                            for p in active_peers {
-                                let _ =
-                                    dispatch_http_post(&p.socket_addr, "/api/receive", &out_body)
-                                        .await;
+                            if ble_t
+                                .send_raw_bytes(&target, out_body.as_bytes())
+                                .await
+                                .is_ok()
+                            {
+                                delivered = true;
+                            }
+                        }
+
+                        if delivered {
+                            {
+                                let st = state_clone.lock().unwrap();
+                                let storage_key =
+                                    KeyStore::get_or_create_device_storage_key_for_path(Some(
+                                        &st.session_store_path,
+                                    ))
+                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                let _ = save_messages_encrypted(
+                                    &st.messages,
+                                    &st.messages_store_path,
+                                    &storage_key,
+                                );
+                                let _ = save_contacts_encrypted(
+                                    &st.contacts,
+                                    &st.contacts_store_path,
+                                    &storage_key,
+                                );
                             }
                             let resp = json_response(
                                 "200 OK",
@@ -1197,675 +1405,477 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                         }
                     }
 
-                    // Handle Local Assistant / Saved Messages
-                    if req.alias == "xChat Assistant"
-                        || (target_opt.as_deref() == Some("local") && req.alias == "Saved Messages")
+                    // If delivery or session creation failed, update message status to failed
                     {
-                        {
-                            let mut st = state_clone.lock().unwrap();
-                            if req.alias == "xChat Assistant" {
-                                let hist = st.messages.entry(req.alias.clone()).or_default();
-                                hist.push(ChatMessage {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    sender: "peer".to_string(),
-                                    text: format!("Echo [Personal Assistant]: {}", req.text),
-                                    time: get_now_time_string(),
-                                    status: "delivered".to_string(),
-                                });
+                        let mut st = state_clone.lock().unwrap();
+                        if let Some(msgs) = st.messages.get_mut(&req.alias) {
+                            if let Some(last_msg) = msgs.last_mut() {
+                                last_msg.status = "failed".to_string();
                             }
-                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
-                                Some(&st.session_store_path),
-                            )
-                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                            let _ = save_messages_encrypted(
-                                &st.messages,
-                                &st.messages_store_path,
-                                &storage_key,
-                            );
-                            let _ = save_contacts_encrypted(
-                                &st.contacts,
-                                &st.contacts_store_path,
-                                &storage_key,
-                            );
                         }
-                        let resp = json_response(
-                            "200 OK",
-                            r#"{"status":"delivered","authenticated":true}"#,
-                            &cors_headers,
-                        );
-                        let _ = socket.write_all(resp.as_bytes()).await;
-                        return;
-                    } else if let Some(target) = target_opt {
-                        if !target.is_empty() && target != "local" {
-                            // Find contact info (address) if known
-                            let contact_addr = {
-                                let st = state_clone.lock().unwrap();
-                                st.contacts
-                                    .iter()
-                                    .find(|c| c.alias == req.alias || c.target == target)
-                                    .map(|c| c.address.clone())
-                            };
-
-                            // Check if an established ratcheted session exists
-                            let mut existing_session_key = None;
-                            {
-                                let st = state_clone.lock().unwrap();
-                                if let Some(ref addr) = contact_addr {
-                                    if st.sessions.contains_key(addr) {
-                                        existing_session_key = Some(addr.clone());
-                                    }
-                                }
-                                if existing_session_key.is_none()
-                                    && st.sessions.contains_key(&target)
-                                {
-                                    existing_session_key = Some(target.clone());
-                                }
-                                if existing_session_key.is_none()
-                                    && st.sessions.contains_key(&req.alias)
-                                {
-                                    existing_session_key = Some(req.alias.clone());
-                                }
-                            }
-
-                            let mut session_envelope = None;
-                            if let Some(skey) = existing_session_key {
-                                let mut st = state_clone.lock().unwrap();
-                                if let Some(sess) = st.sessions.get_mut(&skey) {
-                                    if let Ok(env) = sess.encrypt_message(
-                                        req.text.as_bytes(),
-                                        DIRECT_ROUTE,
-                                        now_ts,
-                                        86400,
-                                    ) {
-                                        let storage_key =
-                                            KeyStore::get_or_create_device_storage_key_for_path(
-                                                Some(&st.session_store_path),
-                                            )
-                                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                                        let _ = save_sessions_encrypted(
-                                            &st.sessions,
-                                            &st.session_store_path,
-                                            &storage_key,
-                                        );
-                                        session_envelope = Some(env);
-                                    }
-                                }
-                            }
-
-                            // If no session exists, initiate outbound session via X3DH with remote prekey bundle
-                            if session_envelope.is_none() {
-                                if let Ok(bundle_json) =
-                                    dispatch_http_get(&target, "/api/bundle").await
-                                {
-                                    if let Ok(bundle) =
-                                        serde_json::from_str::<xchat_crypto::x3dh::PrekeyBundle>(
-                                            &bundle_json,
-                                        )
-                                    {
-                                        let mut st = state_clone.lock().unwrap();
-                                        if let Ok((sess, env)) = Session::initiate_outbound(
-                                            &st.keystore,
-                                            &bundle,
-                                            req.text.as_bytes(),
-                                            DIRECT_ROUTE,
-                                            now_ts,
-                                            86400,
-                                        ) {
-                                            let peer_addr = bundle.identity_key.address();
-                                            st.sessions.insert(peer_addr.clone(), sess.clone());
-                                            st.sessions.insert(target.clone(), sess);
-                                            if let Some(c) = st.contacts.iter_mut().find(|c| {
-                                                c.alias == req.alias || c.target == target
-                                            }) {
-                                                c.address = peer_addr;
-                                            }
-                                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(&st.session_store_path))
-                                                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                                            let _ = save_sessions_encrypted(
-                                                &st.sessions,
-                                                &st.session_store_path,
-                                                &storage_key,
-                                            );
-                                            session_envelope = Some(env);
-                                        }
-                                    }
-                                }
-                            }
-
-                            if let Some(envelope) = session_envelope {
-                                let wire_envelope = WireMessageEnvelope {
-                                    envelope,
-                                    sender_alias: Some(my_handle),
-                                    sender_socket: Some(format!("{}:{}", my_ip, my_port)),
-                                    sender_address: Some(my_addr),
-                                };
-                                let out_body =
-                                    serde_json::to_string(&wire_envelope).unwrap_or_default();
-                                let mut delivered = false;
-                                if !target.starts_with("ble:")
-                                    && target.contains(':')
-                                    && !target.starts_with('@')
-                                    && dispatch_http_post(&target, "/api/receive", &out_body)
-                                        .await
-                                        .is_ok()
-                                {
-                                    delivered = true;
-                                }
-                                if !delivered {
-                                    let ble_t = {
-                                        let st = state_clone.lock().unwrap();
-                                        st.ble_transport.clone()
-                                    };
-                                    if ble_t
-                                        .send_raw_bytes(&target, out_body.as_bytes())
-                                        .await
-                                        .is_ok()
-                                    {
-                                        delivered = true;
-                                    }
-                                }
-
-                                if delivered {
-                                    {
-                                        let st = state_clone.lock().unwrap();
-                                        let storage_key =
-                                            KeyStore::get_or_create_device_storage_key_for_path(
-                                                Some(&st.session_store_path),
-                                            )
-                                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                                        let _ = save_messages_encrypted(
-                                            &st.messages,
-                                            &st.messages_store_path,
-                                            &storage_key,
-                                        );
-                                        let _ = save_contacts_encrypted(
-                                            &st.contacts,
-                                            &st.contacts_store_path,
-                                            &storage_key,
-                                        );
-                                    }
-                                    let resp = json_response(
-                                        "200 OK",
-                                        r#"{"status":"delivered","authenticated":true}"#,
-                                        &cors_headers,
-                                    );
-                                    let _ = socket.write_all(resp.as_bytes()).await;
-                                    return;
-                                }
-                            }
-
-                            // If delivery or session creation failed, update message status to failed
-                            {
-                                let mut st = state_clone.lock().unwrap();
-                                if let Some(msgs) = st.messages.get_mut(&req.alias) {
-                                    if let Some(last_msg) = msgs.last_mut() {
-                                        last_msg.status = "failed".to_string();
-                                    }
-                                }
-                                let storage_key =
-                                    KeyStore::get_or_create_device_storage_key_for_path(Some(
-                                        &st.session_store_path,
-                                    ))
-                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                                let _ = save_messages_encrypted(
-                                    &st.messages,
-                                    &st.messages_store_path,
-                                    &storage_key,
-                                );
-                            }
-                            let resp = json_response(
-                                "502 Bad Gateway",
-                                r#"{"status":"failed","error":"Delivery failed to recipient"}"#,
-                                &cors_headers,
-                            );
-                            let _ = socket.write_all(resp.as_bytes()).await;
-                            return;
-                        }
-                    }
-                }
-                let resp = json_response(
-                    "400 Bad Request",
-                    r#"{"error":"Invalid request parameters"}"#,
-                    &cors_headers,
-                );
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/receive" && method == "POST" {
-                let wire_opt = serde_json::from_str::<WireMessageEnvelope>(&body).ok();
-                let (envelope, sender_alias_opt, sender_socket_opt, sender_addr_hint) =
-                    if let Some(wire) = wire_opt {
-                        (
-                            wire.envelope,
-                            wire.sender_alias,
-                            wire.sender_socket,
-                            wire.sender_address,
-                        )
-                    } else if let Ok(env) = serde_json::from_str::<EncryptedEnvelope>(&body) {
-                        (env, None, None, None)
-                    } else {
-                        let resp = json_response(
-                            "401 Unauthorized",
-                            r#"{"error":"Unauthenticated or corrupted envelope"}"#,
-                            &cors_headers,
-                        );
-                        let _ = socket.write_all(resp.as_bytes()).await;
-                        return;
-                    };
-
-                let now_ts = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-
-                if envelope.is_expired(now_ts) {
-                    let resp = json_response(
-                        "401 Unauthorized",
-                        r#"{"error":"Envelope has expired"}"#,
-                        &cors_headers,
-                    );
-                    let _ = socket.write_all(resp.as_bytes()).await;
-                    return;
-                }
-
-                // Check anti-replay filter
-                let is_replayed = {
-                    let mut st = state_clone.lock().unwrap();
-                    let err = st
-                        .replay_filter
-                        .check_and_record(&envelope.header.message_id, now_ts)
-                        .is_err();
-                    if !err {
-                        let replay_path = st.session_store_path.with_file_name(".xchat_replay.bin");
                         let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
                             Some(&st.session_store_path),
                         )
                         .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                        let _ = st
-                            .replay_filter
-                            .save_to_disk_encrypted(&replay_path, &storage_key);
+                        let _ = save_messages_encrypted(
+                            &st.messages,
+                            &st.messages_store_path,
+                            &storage_key,
+                        );
                     }
-                    err
-                };
-                if is_replayed {
                     let resp = json_response(
-                        "401 Unauthorized",
-                        r#"{"error":"Replayed message rejected"}"#,
+                        "502 Bad Gateway",
+                        r#"{"status":"failed","error":"Delivery failed to recipient"}"#,
                         &cors_headers,
                     );
                     let _ = socket.write_all(resp.as_bytes()).await;
                     return;
                 }
-
-                // Check if this envelope belongs to an ephemeral Burner Room
-                let burner_match = {
-                    let mut st = state_clone.lock().unwrap();
-                    let mut found = None;
-                    for (room_alias, burner) in st.burner_rooms.iter_mut() {
-                        if envelope.header.destination_token == burner.routing_token() {
-                            if let Ok(bmsg) = burner.receive_envelope(&envelope, now_ts) {
-                                found = Some((room_alias.clone(), bmsg));
-                                break;
-                            }
-                        }
-                    }
-                    found
-                };
-
-                if let Some((room_alias, bmsg)) = burner_match {
-                    let now_str = get_now_time_string();
-                    let msg = ChatMessage {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        sender: "peer".to_string(),
-                        text: bmsg.content.clone(),
-                        time: now_str.clone(),
-                        status: "delivered".to_string(),
-                    };
-                    {
-                        let mut st = state_clone.lock().unwrap();
-                        st.messages.entry(room_alias.clone()).or_default().push(msg);
-                        if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == room_alias) {
-                            c.last_message = bmsg.content;
-                            c.last_time = now_str;
-                        }
-                    }
-                    let resp = json_response(
-                        "200 OK",
-                        r#"{"status":"delivered","authenticated":true}"#,
-                        &cors_headers,
-                    );
-                    let _ = socket.write_all(resp.as_bytes()).await;
-                    return;
-                }
-
-                // Decrypt inbound message via Session
-                let decrypt_result = {
-                    let mut st = state_clone.lock().unwrap();
-                    if envelope.x3dh_init.is_some() {
-                        match Session::respond_inbound(&mut st.keystore, &envelope, now_ts) {
-                            Ok((new_session, pt_bytes)) => {
-                                let sender_addr = new_session.peer_identity.address();
-                                if let Some(ref sock) = sender_socket_opt {
-                                    st.sessions.insert(sock.clone(), new_session.clone());
-                                }
-                                st.sessions.insert(sender_addr.clone(), new_session);
-                                let ks_path = get_keystore_path();
-                                let _ = st.keystore.save_to_path(&ks_path);
-                                let storage_key =
-                                    KeyStore::get_or_create_device_storage_key_for_path(Some(
-                                        &st.session_store_path,
-                                    ))
-                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                                let _ = save_sessions_encrypted(
-                                    &st.sessions,
-                                    &st.session_store_path,
-                                    &storage_key,
-                                );
-                                Ok((sender_addr, pt_bytes))
-                            }
-                            Err(e) => Err(format!("X3DH respond failed: {:?}", e)),
-                        }
-                    } else {
-                        let mut found = None;
-                        if let Some(hint) = &sender_addr_hint {
-                            if let Some(session) = st.sessions.get_mut(hint) {
-                                let mut candidate = session.clone();
-                                if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
-                                    *session = candidate;
-                                    found = Some((hint.clone(), pt_bytes));
-                                }
-                            }
-                        }
-                        if found.is_none() {
-                            if let Some(sock) = &sender_socket_opt {
-                                if let Some(session) = st.sessions.get_mut(sock) {
-                                    let mut candidate = session.clone();
-                                    if let Ok(pt_bytes) =
-                                        candidate.decrypt_message(&envelope, now_ts)
-                                    {
-                                        *session = candidate;
-                                        found = Some((sock.clone(), pt_bytes));
-                                    }
-                                }
-                            }
-                        }
-                        if found.is_none() {
-                            for (addr, session) in st.sessions.iter_mut() {
-                                let mut candidate = session.clone();
-                                if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
-                                    *session = candidate;
-                                    found = Some((addr.clone(), pt_bytes));
-                                    break;
-                                }
-                            }
-                        }
-                        if let Some((addr, pt_bytes)) = found {
-                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
-                                Some(&st.session_store_path),
-                            )
-                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                            let _ = save_sessions_encrypted(
-                                &st.sessions,
-                                &st.session_store_path,
-                                &storage_key,
-                            );
-                            Ok((addr, pt_bytes))
-                        } else {
-                            Err("No matching ratcheted session found".to_string())
-                        }
-                    }
-                };
-
-                let (resp_status, resp_body) = match decrypt_result {
-                    Ok((sender_addr, pt_bytes)) => {
-                        let plaintext = match String::from_utf8(pt_bytes) {
-                            Ok(s) => s,
-                            Err(_) => {
-                                let resp = json_response(
-                                    "401 Unauthorized",
-                                    r#"{"error":"Payload is not valid UTF-8"}"#,
-                                    &cors_headers,
-                                );
-                                let _ = socket.write_all(resp.as_bytes()).await;
-                                return;
-                            }
-                        };
-                        let now_str = get_now_time_string();
-                        let msg = ChatMessage {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            sender: "peer".to_string(),
-                            text: plaintext.clone(),
-                            time: now_str.clone(),
-                            status: "delivered".to_string(),
-                        };
-
-                        let sender_alias_clean = sender_alias_opt
-                            .clone()
-                            .unwrap_or_else(|| sender_addr.clone());
-
-                        {
-                            let mut st = state_clone.lock().unwrap();
-                            let mut target_alias = sender_alias_clean.clone();
-                            let effective_target = sender_socket_opt.clone().unwrap_or_else(|| {
-                                st.discovery
-                                    .get_active_peers()
-                                    .into_iter()
-                                    .find(|p| p.address == sender_addr)
-                                    .map(|p| p.socket_addr)
-                                    .unwrap_or_default()
-                            });
-
-                            if let Some(c) = st.contacts.iter_mut().find(|c| {
-                                c.address == sender_addr
-                                    || c.alias == sender_alias_clean
-                                    || (!c.target.is_empty()
-                                        && !effective_target.is_empty()
-                                        && effective_target == c.target)
-                            }) {
-                                target_alias = c.alias.clone();
-                                c.last_message = plaintext.clone();
-                                c.last_time = now_str.clone();
-                                if !effective_target.is_empty()
-                                    && (c.target.is_empty()
-                                        || c.target == "local"
-                                        || c.target == "Direct")
-                                {
-                                    c.target = effective_target.clone();
-                                }
-                                if c.address.is_empty() {
-                                    c.address = sender_addr.clone();
-                                }
-                            } else {
-                                st.contacts.push(ContactEntry {
-                                    alias: sender_alias_clean.clone(),
-                                    address: sender_addr.clone(),
-                                    target: effective_target,
-                                    status: "Online".to_string(),
-                                    last_message: plaintext.clone(),
-                                    last_time: now_str.clone(),
-                                });
-                            }
-
-                            st.messages
-                                .entry(target_alias)
-                                .or_default()
-                                .push(msg.clone());
-                            st.messages.entry(sender_addr).or_default().push(msg);
-
-                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
-                                Some(&st.session_store_path),
-                            )
-                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
-                            let _ = save_messages_encrypted(
-                                &st.messages,
-                                &st.messages_store_path,
-                                &storage_key,
-                            );
-                            let _ = save_contacts_encrypted(
-                                &st.contacts,
-                                &st.contacts_store_path,
-                                &storage_key,
-                            );
-                        }
-
-                        ("200 OK", r#"{"status":"delivered","authenticated":true}"#)
-                    }
-                    Err(_) => (
-                        "401 Unauthorized",
-                        r#"{"error":"Unauthenticated or corrupted envelope"}"#,
-                    ),
-                };
-
-                let resp = json_response(resp_status, resp_body, &cors_headers);
+            }
+        }
+        let resp = json_response(
+            "400 Bad Request",
+            r#"{"error":"Invalid request parameters"}"#,
+            &cors_headers,
+        );
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/receive" && method == "POST" {
+        let wire_opt = serde_json::from_str::<WireMessageEnvelope>(&body).ok();
+        let (envelope, sender_alias_opt, sender_socket_opt, sender_addr_hint) =
+            if let Some(wire) = wire_opt {
+                (
+                    wire.envelope,
+                    wire.sender_alias,
+                    wire.sender_socket,
+                    wire.sender_address,
+                )
+            } else if let Ok(env) = serde_json::from_str::<EncryptedEnvelope>(&body) {
+                (env, None, None, None)
+            } else {
+                let resp = json_response(
+                    "401 Unauthorized",
+                    r#"{"error":"Unauthenticated or corrupted envelope"}"#,
+                    &cors_headers,
+                );
                 let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path.starts_with("/api/messages") && method == "GET" {
-                let peer_opt = path.split('?').nth(1).and_then(|q| {
-                    q.split('&')
-                        .find(|param| param.starts_with("peer="))
-                        .map(|param| urlencoding_decode(&param[5..]))
-                });
+                return;
+            };
 
-                let msgs_json = {
-                    let st = state_clone.lock().unwrap();
-                    if let Some(peer) = peer_opt {
-                        let list = get_unified_messages_for_peer(&st, &peer);
-                        serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
-                    } else {
-                        "[]".to_string()
+        let now_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        if envelope.is_expired(now_ts) {
+            let resp = json_response(
+                "401 Unauthorized",
+                r#"{"error":"Envelope has expired"}"#,
+                &cors_headers,
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            return;
+        }
+
+        // Check anti-replay filter
+        let is_replayed = {
+            let mut st = state_clone.lock().unwrap();
+            let err = st
+                .replay_filter
+                .check_and_record(&envelope.header.message_id, now_ts)
+                .is_err();
+            if !err {
+                let replay_path = st.session_store_path.with_file_name(".xchat_replay.bin");
+                let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
+                    &st.session_store_path,
+                ))
+                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                let _ = st
+                    .replay_filter
+                    .save_to_disk_encrypted(&replay_path, &storage_key);
+            }
+            err
+        };
+        if is_replayed {
+            let resp = json_response(
+                "401 Unauthorized",
+                r#"{"error":"Replayed message rejected"}"#,
+                &cors_headers,
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            return;
+        }
+
+        // Check if this envelope belongs to an ephemeral Burner Room
+        let burner_match = {
+            let mut st = state_clone.lock().unwrap();
+            let mut found = None;
+            for (room_alias, burner) in st.burner_rooms.iter_mut() {
+                if envelope.header.destination_token == burner.routing_token() {
+                    if let Ok(bmsg) = burner.receive_envelope(&envelope, now_ts) {
+                        found = Some((room_alias.clone(), bmsg));
+                        break;
                     }
-                };
-
-                let resp = json_response("200 OK", &msgs_json, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/ping" && method == "POST" {
-                #[derive(Deserialize)]
-                struct PingReq {
-                    target: Option<String>,
-                    peer: Option<String>,
                 }
-                let ping_target = serde_json::from_str::<PingReq>(&body)
-                    .ok()
-                    .and_then(|r| r.target.or(r.peer));
-                if let Some(mut target) = ping_target {
-                    if target.is_empty() || target == "local" {
+            }
+            found
+        };
+
+        if let Some((room_alias, bmsg)) = burner_match {
+            let now_str = get_now_time_string();
+            let msg = ChatMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                sender: "peer".to_string(),
+                text: bmsg.content.clone(),
+                time: now_str.clone(),
+                status: "delivered".to_string(),
+            };
+            {
+                let mut st = state_clone.lock().unwrap();
+                st.messages.entry(room_alias.clone()).or_default().push(msg);
+                if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == room_alias) {
+                    c.last_message = bmsg.content;
+                    c.last_time = now_str;
+                }
+            }
+            let resp = json_response(
+                "200 OK",
+                r#"{"status":"delivered","authenticated":true}"#,
+                &cors_headers,
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+            return;
+        }
+
+        // Decrypt inbound message via Session
+        let decrypt_result = {
+            let mut st = state_clone.lock().unwrap();
+            if envelope.x3dh_init.is_some() {
+                match Session::respond_inbound(&mut st.keystore, &envelope, now_ts) {
+                    Ok((new_session, pt_bytes)) => {
+                        let sender_addr = new_session.peer_identity.address();
+                        if let Some(ref sock) = sender_socket_opt {
+                            st.sessions.insert(sock.clone(), new_session.clone());
+                        }
+                        st.sessions.insert(sender_addr.clone(), new_session);
+                        let ks_path = get_keystore_path();
+                        let _ = st.keystore.save_to_path(&ks_path);
+                        let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
+                            Some(&st.session_store_path),
+                        )
+                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                        let _ = save_sessions_encrypted(
+                            &st.sessions,
+                            &st.session_store_path,
+                            &storage_key,
+                        );
+                        Ok((sender_addr, pt_bytes))
+                    }
+                    Err(e) => Err(format!("X3DH respond failed: {:?}", e)),
+                }
+            } else {
+                let mut found = None;
+                if let Some(hint) = &sender_addr_hint {
+                    if let Some(session) = st.sessions.get_mut(hint) {
+                        let mut candidate = session.clone();
+                        if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
+                            *session = candidate;
+                            found = Some((hint.clone(), pt_bytes));
+                        }
+                    }
+                }
+                if found.is_none() {
+                    if let Some(sock) = &sender_socket_opt {
+                        if let Some(session) = st.sessions.get_mut(sock) {
+                            let mut candidate = session.clone();
+                            if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
+                                *session = candidate;
+                                found = Some((sock.clone(), pt_bytes));
+                            }
+                        }
+                    }
+                }
+                if found.is_none() {
+                    for (addr, session) in st.sessions.iter_mut() {
+                        let mut candidate = session.clone();
+                        if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
+                            *session = candidate;
+                            found = Some((addr.clone(), pt_bytes));
+                            break;
+                        }
+                    }
+                }
+                if let Some((addr, pt_bytes)) = found {
+                    let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
+                        &st.session_store_path,
+                    ))
+                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    let _ =
+                        save_sessions_encrypted(&st.sessions, &st.session_store_path, &storage_key);
+                    Ok((addr, pt_bytes))
+                } else {
+                    Err("No matching ratcheted session found".to_string())
+                }
+            }
+        };
+
+        let (resp_status, resp_body) = match decrypt_result {
+            Ok((sender_addr, pt_bytes)) => {
+                let plaintext = match String::from_utf8(pt_bytes) {
+                    Ok(s) => s,
+                    Err(_) => {
                         let resp = json_response(
-                            "200 OK",
-                            r#"{"status":"pong","latency_ms":1}"#,
+                            "401 Unauthorized",
+                            r#"{"error":"Payload is not valid UTF-8"}"#,
                             &cors_headers,
                         );
                         let _ = socket.write_all(resp.as_bytes()).await;
                         return;
                     }
-                    {
-                        let st = state_clone.lock().unwrap();
-                        if let Some(c) = st
-                            .contacts
-                            .iter()
-                            .find(|c| c.alias == target || c.address == target)
-                        {
-                            if !c.target.is_empty() && c.target != "local" {
-                                target = c.target.clone();
-                            }
-                        }
-                    }
-                    let start = std::time::Instant::now();
-                    match dispatch_http_get(&target, "/api/identity").await {
-                        Ok(_) => {
-                            let latency = start.elapsed().as_millis().max(1);
-                            let resp_body =
-                                format!(r#"{{"status":"pong","latency_ms":{}}}"#, latency);
-                            let resp = json_response("200 OK", &resp_body, &cors_headers);
-                            let _ = socket.write_all(resp.as_bytes()).await;
-                        }
-                        Err(e) => {
-                            let resp_body = format!(r#"{{"status":"failed","error":"{}"}}"#, e);
-                            let resp =
-                                json_response("504 Gateway Timeout", &resp_body, &cors_headers);
-                            let _ = socket.write_all(resp.as_bytes()).await;
-                        }
-                    }
-                } else {
-                    let resp = json_response(
-                        "400 Bad Request",
-                        r#"{"error":"Target required"}"#,
-                        &cors_headers,
-                    );
-                    let _ = socket.write_all(resp.as_bytes()).await;
-                }
-            } else if path == "/api/sos" && method == "POST" {
-                #[derive(Deserialize)]
-                struct SosReq {
-                    lat: Option<f64>,
-                    lon: Option<f64>,
-                    message: Option<String>,
-                }
-                let sos_req = serde_json::from_str::<SosReq>(&body).unwrap_or(SosReq {
-                    lat: None,
-                    lon: None,
-                    message: None,
-                });
-                let lat = sos_req.lat.unwrap_or(0.0);
-                let lon = sos_req.lon.unwrap_or(0.0);
-                let sos_msg = sos_req
-                    .message
-                    .unwrap_or_else(|| "Emergency SOS! Need immediate assistance.".to_string());
-
-                let (beacon_env, my_addr, active_peers) = {
-                    let st = state_clone.lock().unwrap();
-                    let beacon = xchat_core::sos::create_emergency_beacon(
-                        &st.keystore.identity,
-                        lat,
-                        lon,
-                        &sos_msg,
-                        now,
-                        7200,
-                    );
-                    let addr = st.keystore.identity.public_key().address();
-                    let peers = st.discovery.get_active_peers();
-                    (beacon, addr, peers)
+                };
+                let now_str = get_now_time_string();
+                let msg = ChatMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    sender: "peer".to_string(),
+                    text: plaintext.clone(),
+                    time: now_str.clone(),
+                    status: "delivered".to_string(),
                 };
 
-                let mut peer_count = 0;
-                if let Ok(env) = beacon_env {
-                    let wire = WireMessageEnvelope {
-                        envelope: env,
-                        sender_alias: Some(format!("SOS: {}", my_addr)),
-                        sender_socket: None,
-                        sender_address: Some(my_addr),
-                    };
-                    let wire_body = serde_json::to_string(&wire).unwrap_or_default();
-                    for peer in active_peers {
-                        if dispatch_http_post(&peer.socket_addr, "/api/receive", &wire_body)
-                            .await
-                            .is_ok()
+                let sender_alias_clean = sender_alias_opt
+                    .clone()
+                    .unwrap_or_else(|| sender_addr.clone());
+
+                {
+                    let mut st = state_clone.lock().unwrap();
+                    let mut target_alias = sender_alias_clean.clone();
+                    let effective_target = sender_socket_opt.clone().unwrap_or_else(|| {
+                        st.discovery
+                            .get_active_peers()
+                            .into_iter()
+                            .find(|p| p.address == sender_addr)
+                            .map(|p| p.socket_addr)
+                            .unwrap_or_default()
+                    });
+
+                    if let Some(c) = st.contacts.iter_mut().find(|c| {
+                        c.address == sender_addr
+                            || c.alias == sender_alias_clean
+                            || (!c.target.is_empty()
+                                && !effective_target.is_empty()
+                                && effective_target == c.target)
+                    }) {
+                        target_alias = c.alias.clone();
+                        c.last_message = plaintext.clone();
+                        c.last_time = now_str.clone();
+                        if !effective_target.is_empty()
+                            && (c.target.is_empty() || c.target == "local" || c.target == "Direct")
                         {
-                            peer_count += 1;
+                            c.target = effective_target.clone();
                         }
+                        if c.address.is_empty() {
+                            c.address = sender_addr.clone();
+                        }
+                    } else {
+                        st.contacts.push(ContactEntry {
+                            alias: sender_alias_clean.clone(),
+                            address: sender_addr.clone(),
+                            target: effective_target,
+                            status: "Online".to_string(),
+                            last_message: plaintext.clone(),
+                            last_time: now_str.clone(),
+                        });
+                    }
+
+                    st.messages
+                        .entry(target_alias)
+                        .or_default()
+                        .push(msg.clone());
+                    st.messages.entry(sender_addr).or_default().push(msg);
+
+                    let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
+                        &st.session_store_path,
+                    ))
+                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    let _ = save_messages_encrypted(
+                        &st.messages,
+                        &st.messages_store_path,
+                        &storage_key,
+                    );
+                    let _ = save_contacts_encrypted(
+                        &st.contacts,
+                        &st.contacts_store_path,
+                        &storage_key,
+                    );
+                }
+
+                ("200 OK", r#"{"status":"delivered","authenticated":true}"#)
+            }
+            Err(_) => (
+                "401 Unauthorized",
+                r#"{"error":"Unauthenticated or corrupted envelope"}"#,
+            ),
+        };
+
+        let resp = json_response(resp_status, resp_body, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path.starts_with("/api/messages") && method == "GET" {
+        let peer_opt = path.split('?').nth(1).and_then(|q| {
+            q.split('&')
+                .find(|param| param.starts_with("peer="))
+                .map(|param| urlencoding_decode(&param[5..]))
+        });
+
+        let msgs_json = {
+            let st = state_clone.lock().unwrap();
+            if let Some(peer) = peer_opt {
+                let list = get_unified_messages_for_peer(&st, &peer);
+                serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+            } else {
+                "[]".to_string()
+            }
+        };
+
+        let resp = json_response("200 OK", &msgs_json, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/ping" && method == "POST" {
+        #[derive(Deserialize)]
+        struct PingReq {
+            target: Option<String>,
+            peer: Option<String>,
+        }
+        let ping_target = serde_json::from_str::<PingReq>(&body)
+            .ok()
+            .and_then(|r| r.target.or(r.peer));
+        if let Some(mut target) = ping_target {
+            if target.is_empty() || target == "local" {
+                let resp = json_response(
+                    "200 OK",
+                    r#"{"status":"pong","latency_ms":1}"#,
+                    &cors_headers,
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                return;
+            }
+            {
+                let st = state_clone.lock().unwrap();
+                if let Some(c) = st
+                    .contacts
+                    .iter()
+                    .find(|c| c.alias == target || c.address == target)
+                {
+                    if !c.target.is_empty() && c.target != "local" {
+                        target = c.target.clone();
                     }
                 }
-                let resp_body = format!(
-                    r#"{{"status":"broadcasted","peers_reached":{}}}"#,
-                    peer_count
-                );
-                let resp = json_response("200 OK", &resp_body, &cors_headers);
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/jsqr.min.js" {
-                let resp = format!(
+            }
+            let start = std::time::Instant::now();
+            match dispatch_http_get(&target, "/api/identity").await {
+                Ok(_) => {
+                    let latency = start.elapsed().as_millis().max(1);
+                    let resp_body = format!(r#"{{"status":"pong","latency_ms":{}}}"#, latency);
+                    let resp = json_response("200 OK", &resp_body, &cors_headers);
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                }
+                Err(e) => {
+                    let resp_body = format!(r#"{{"status":"failed","error":"{}"}}"#, e);
+                    let resp = json_response("504 Gateway Timeout", &resp_body, &cors_headers);
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                }
+            }
+        } else {
+            let resp = json_response(
+                "400 Bad Request",
+                r#"{"error":"Target required"}"#,
+                &cors_headers,
+            );
+            let _ = socket.write_all(resp.as_bytes()).await;
+        }
+    } else if path == "/api/sos" && method == "POST" {
+        #[derive(Deserialize)]
+        struct SosReq {
+            lat: Option<f64>,
+            lon: Option<f64>,
+            message: Option<String>,
+        }
+        let sos_req = serde_json::from_str::<SosReq>(&body).unwrap_or(SosReq {
+            lat: None,
+            lon: None,
+            message: None,
+        });
+        let lat = sos_req.lat.unwrap_or(0.0);
+        let lon = sos_req.lon.unwrap_or(0.0);
+        let sos_msg = sos_req
+            .message
+            .unwrap_or_else(|| "Emergency SOS! Need immediate assistance.".to_string());
+
+        let now_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let (beacon_env, my_addr, active_peers) = {
+            let st = state_clone.lock().unwrap();
+            let beacon = xchat_core::sos::create_emergency_beacon(
+                &st.keystore.identity,
+                lat,
+                lon,
+                &sos_msg,
+                now_ts,
+                7200,
+            );
+            let addr = st.keystore.identity.public_key().address();
+            let peers = st.discovery.get_active_peers();
+            (beacon, addr, peers)
+        };
+
+        let mut peer_count = 0;
+        if let Ok(env) = beacon_env {
+            let wire = WireMessageEnvelope {
+                envelope: env,
+                sender_alias: Some(format!("SOS: {}", my_addr)),
+                sender_socket: None,
+                sender_address: Some(my_addr),
+            };
+            let wire_body = serde_json::to_string(&wire).unwrap_or_default();
+            for peer in active_peers {
+                if dispatch_http_post(&peer.socket_addr, "/api/receive", &wire_body)
+                    .await
+                    .is_ok()
+                {
+                    peer_count += 1;
+                }
+            }
+        }
+        let resp_body = format!(
+            r#"{{"status":"broadcasted","peers_reached":{}}}"#,
+            peer_count
+        );
+        let resp = json_response("200 OK", &resp_body, &cors_headers);
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/jsqr.min.js" {
+        let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/javascript; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     JSQR_JS.len(),
                     JSQR_JS
                 );
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else {
-                let resp = format!(
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else {
+        let csrf_token = {
+            let st = state_clone.lock().unwrap();
+            st.csrf_token.clone()
+        };
+        let meta_tag = format!(r#"<meta name="xchat-csrf-token" content="{}">"#, csrf_token);
+        let html = if EMBEDDED_HTML.contains("</head>") {
+            EMBEDDED_HTML.replacen("</head>", &format!("{}\n</head>", meta_tag), 1)
+        } else {
+            format!("{}\n{}", meta_tag, EMBEDDED_HTML)
+        };
+        let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    EMBEDDED_HTML.len(),
-                    EMBEDDED_HTML
+                    html.len(),
+                    html
                 );
-                let _ = socket.write_all(resp.as_bytes()).await;
-            }
-        });
+        let _ = socket.write_all(resp.as_bytes()).await;
     }
-
-    Ok(())
 }
 
 fn urlencoding_decode(s: &str) -> String {
@@ -1995,7 +2005,131 @@ fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use xchat_crypto::identity::IdentityKeyPair;
+    use xchat_transport::ble_central::BleCentralTransport;
+
+    pub async fn create_test_app_state() -> (Arc<Mutex<AppState>>, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let keystore = KeyStore::generate();
+        let my_pub = keystore.identity.public_key();
+        let profile = UserProfile::new(
+            "test_user",
+            "Test User",
+            &my_pub.address(),
+            &my_pub.fingerprint(),
+            1_000_000,
+        )
+        .unwrap();
+        let discovery = PeerDiscoveryEngine::bind(0, 0).await.unwrap();
+        let ble_transport = BleCentralTransport::new().await;
+        let csrf_token = "test_csrf_token_secret".to_string();
+        let contacts = get_default_contacts(&my_pub.address());
+        let state = Arc::new(Mutex::new(AppState {
+            keystore,
+            profile,
+            local_ip: "127.0.0.1".to_string(),
+            local_port: 0,
+            contacts,
+            messages: HashMap::new(),
+            discovery,
+            ble_transport,
+            sessions: HashMap::new(),
+            replay_filter: ReplayFilter::new(),
+            csrf_token,
+            session_store_path: temp_dir.path().join("sessions.bin"),
+            contacts_store_path: temp_dir.path().join("contacts.bin"),
+            messages_store_path: temp_dir.path().join("messages.bin"),
+            burner_rooms: HashMap::new(),
+        }));
+        (state, temp_dir)
+    }
+
+    async fn send_test_http_request(port: u16, state: Arc<Mutex<AppState>>, req: &str) -> String {
+        if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", port)).await {
+            stream.write_all(req.as_bytes()).await.unwrap();
+            let mut resp = Vec::new();
+            stream.read_to_end(&mut resp).await.unwrap();
+            return String::from_utf8_lossy(&resp).to_string();
+        }
+        // In-memory duplex fallback for sandboxed/isolated environments
+        let (client, server) = tokio::io::duplex(65536);
+        let state_clone = state.clone();
+        tokio::spawn(async move {
+            handle_http_connection(server, state_clone, "127.0.0.1".to_string()).await;
+        });
+        let (mut client_read, mut client_write) = tokio::io::split(client);
+        client_write.write_all(req.as_bytes()).await.unwrap();
+        drop(client_write);
+        let mut resp = Vec::new();
+        client_read.read_to_end(&mut resp).await.unwrap();
+        String::from_utf8_lossy(&resp).to_string()
+    }
+
+    #[tokio::test]
+    async fn test_csrf_token_injection_and_api_authorization() {
+        let (state, _temp) = create_test_app_state().await;
+        let expected_token = {
+            let st = state.lock().unwrap();
+            st.csrf_token.clone()
+        };
+
+        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
+        let port = listener_opt
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(8080);
+        if let Some(listener) = listener_opt {
+            let state_srv = state.clone();
+            tokio::spawn(run_server_loop(
+                listener,
+                state_srv,
+                "127.0.0.1".to_string(),
+            ));
+        }
+
+        // 1. Real HTTP GET /
+        let req = format!(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        );
+        let resp_str = send_test_http_request(port, state.clone(), &req).await;
+
+        assert!(resp_str.starts_with("HTTP/1.1 200 OK"));
+        let token_needle = r#"<meta name="xchat-csrf-token" content=""#;
+        let start_pos = resp_str
+            .find(token_needle)
+            .expect("Page must contain injected CSRF meta tag")
+            + token_needle.len();
+        let end_pos = resp_str[start_pos..]
+            .find('"')
+            .expect("Meta tag content closing quote")
+            + start_pos;
+        let extracted_token = &resp_str[start_pos..end_pos];
+        assert_eq!(extracted_token, expected_token);
+
+        // 2. Real HTTP GET /api/contacts without CSRF token -> 401
+        let req_no_token = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        );
+        let resp_no_token_str = send_test_http_request(port, state.clone(), &req_no_token).await;
+        assert!(resp_no_token_str.starts_with("HTTP/1.1 401 Unauthorized"));
+
+        // 3. Real HTTP GET /api/contacts with CSRF token -> 200
+        let req_with_token = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, extracted_token
+        );
+        let resp_with_token_str =
+            send_test_http_request(port, state.clone(), &req_with_token).await;
+        assert!(resp_with_token_str.starts_with("HTTP/1.1 200 OK"));
+        assert!(
+            resp_with_token_str.contains("Saved Messages")
+                || resp_with_token_str.contains("Personal Assistant")
+        );
+    }
 
     #[tokio::test]
     async fn test_gui_e2ee_receive_validation() {
