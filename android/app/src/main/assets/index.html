@@ -3494,7 +3494,7 @@ function renderNearbyRadar(peers) {
 function connectToDiscoveredPeer(peer) {
     const u = peer.username || '@peer';
     const isBle = peer.transport === 'ble' || (peer.address && peer.address.startsWith('ble:')) || (peer.ip && peer.ip.startsWith('ble:'));
-    const sock = isBle ? (peer.address || peer.ip) : (peer.ip ? `${peer.ip}:${peer.port || 8080}` : (peer.address || '127.0.0.1:8080'));
+    const sock = isBle ? (peer.address || peer.ip) : (peer.socket_addr || (peer.ip ? `${peer.ip}:${peer.port || 8080}` : (peer.address || '127.0.0.1:8080')));
     const statusLabel = isBle ? 'Physical BLE Mesh' : 'Nearby Wi-Fi Mesh';
 
     let contact = contacts.find(c => c.alias === u || c.target === sock);
@@ -3715,8 +3715,16 @@ function renderMessages() {
         history.forEach(m => {
             const bubble = document.createElement('div');
             bubble.className = 'msg-bubble ' + (m.sender === 'self' ? 'out' : 'in');
-            const statusIcon = m.sender === 'self' ?
-                '<svg class="ico ico-sm ico--mint msg-status" aria-hidden="true"><use href="#i-check-check" xlink:href="#i-check-check"/></svg>' : '';
+            let statusIcon = '';
+            if (m.sender === 'self') {
+                if (m.status === 'failed') {
+                    statusIcon = '<span style="color:var(--holo-coral, #f2a7a3); font-size:11px; margin-left:4px;" title="Delivery failed">! failed</span>';
+                } else if (m.status === 'pending') {
+                    statusIcon = '<span style="color:var(--text-3); font-size:11px; margin-left:4px;">pending</span>';
+                } else {
+                    statusIcon = '<svg class="ico ico-sm ico--mint msg-status" aria-hidden="true"><use href="#i-check-check" xlink:href="#i-check-check"/></svg>';
+                }
+            }
             bubble.innerHTML =
                 escapeHtml(m.text) +
                 '<div class="msg-meta-row">' +
@@ -3790,7 +3798,7 @@ async function sendCurrentMessage() {
         }
     } else {
         try {
-            await fetch(API_BASE + '/api/send', {
+            const resp = await fetch(API_BASE + '/api/send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -3799,7 +3807,23 @@ async function sendCurrentMessage() {
                     text: text
                 })
             });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || data.status === 'failed') {
+                const hist = chatHistories[activeContact.alias];
+                if (hist && hist.length > 0) {
+                    hist[hist.length - 1].status = 'failed';
+                    Storage.set('chat_histories', JSON.stringify(chatHistories));
+                    renderMessages();
+                }
+                showToast(STRINGS.toastUnreachable(activeContact.alias === 'Saved Messages' ? 'Personal notes' : activeContact.alias), true);
+            }
         } catch(e) {
+            const hist = chatHistories[activeContact.alias];
+            if (hist && hist.length > 0) {
+                hist[hist.length - 1].status = 'failed';
+                Storage.set('chat_histories', JSON.stringify(chatHistories));
+                renderMessages();
+            }
             showToast(STRINGS.toastUnreachable(activeContact.alias === 'Saved Messages' ? 'Personal notes' : activeContact.alias), true);
         }
     }
@@ -4670,14 +4694,30 @@ function copyToClip(text, msg) {
     showToast(msg);
 }
 
-function enterBurnerRoom() {
+async function enterBurnerRoom() {
     const roomInput = document.getElementById('burnerRoomInput');
     const modalInput = document.getElementById('burnerRoomInputModal');
     const room = (roomInput ? roomInput.value.trim() : '') || (modalInput ? modalInput.value.trim() : '');
+    const passInput = document.getElementById('burnerPassInput');
+    const modalPassInput = document.getElementById('burnerPassInputModal');
+    const pass = (passInput ? passInput.value.trim() : '') || (modalPassInput ? modalPassInput.value.trim() : '');
     if (!room) {
         showToast(STRINGS.toastEnterRoomName, true);
         return;
     }
+    try {
+        if (!isNative) {
+            await fetch(API_BASE + '/api/burner/join', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ room: room, pass: pass || 'default_pass' })
+            });
+            await loadContacts();
+            const alias = '#' + room;
+            const c = contacts.find(x => x.alias === alias);
+            if (c) selectContact(c);
+        }
+    } catch(e) {}
     showToast(STRINGS.toastRoomJoined(room));
     closeModal('burnerModal');
 }

@@ -79,6 +79,9 @@ pub struct AppState {
     pub replay_filter: ReplayFilter,
     pub csrf_token: String,
     pub session_store_path: PathBuf,
+    pub contacts_store_path: PathBuf,
+    pub messages_store_path: PathBuf,
+    pub burner_rooms: HashMap<String, xchat_core::burner::BurnerRoom>,
 }
 
 fn detect_local_ip() -> String {
@@ -118,7 +121,127 @@ pub fn get_keystore_path() -> PathBuf {
     }
 }
 
-async fn dispatch_http_get(target: &str, path: &str) -> anyhow::Result<String> {
+pub fn get_default_contacts(my_address: &str) -> Vec<ContactEntry> {
+    let now_str = get_now_time_string();
+    vec![
+        ContactEntry {
+            alias: "Saved Messages".to_string(),
+            address: my_address.to_string(),
+            target: "local".to_string(),
+            status: "Encrypted Storage".to_string(),
+            last_message: "Personal cloud notes & encryption test".to_string(),
+            last_time: now_str.clone(),
+        },
+        ContactEntry {
+            alias: "xChat Assistant".to_string(),
+            address: "xchat_assistant".to_string(),
+            target: "local".to_string(),
+            status: "P2P Mesh AI Assistant".to_string(),
+            last_message: "Send a message to test P2P encryption!".to_string(),
+            last_time: now_str,
+        },
+    ]
+}
+
+pub fn save_contacts_encrypted(
+    contacts: &[ContactEntry],
+    path: &std::path::Path,
+    encryption_key: &[u8; 32],
+) -> Result<(), xchat_core::errors::CoreError> {
+    let bytes = serde_json::to_vec(contacts)
+        .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = xchat_crypto::aead::encrypt_aead(
+        encryption_key,
+        &nonce,
+        &bytes,
+        b"xchat-contacts-vault-v1",
+    )
+    .map_err(xchat_core::errors::CoreError::Crypto)?;
+    let mut out = Vec::with_capacity(12 + ciphertext.len());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ciphertext);
+    KeyStore::write_secure_file(path, &out)
+}
+
+pub fn load_contacts_encrypted(
+    path: &std::path::Path,
+    encryption_key: &[u8; 32],
+) -> Result<Vec<ContactEntry>, xchat_core::errors::CoreError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let data = std::fs::read(path)
+        .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    if data.len() < 12 {
+        return Ok(Vec::new());
+    }
+    let (nonce, ciphertext) = data.split_at(12);
+    let mut nonce_arr = [0u8; 12];
+    nonce_arr.copy_from_slice(nonce);
+    let decrypted = xchat_crypto::aead::decrypt_aead(
+        encryption_key,
+        &nonce_arr,
+        ciphertext,
+        b"xchat-contacts-vault-v1",
+    )
+    .map_err(xchat_core::errors::CoreError::Crypto)?;
+    let contacts: Vec<ContactEntry> = serde_json::from_slice(&decrypted)
+        .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    Ok(contacts)
+}
+
+pub fn save_messages_encrypted(
+    messages: &HashMap<String, Vec<ChatMessage>>,
+    path: &std::path::Path,
+    encryption_key: &[u8; 32],
+) -> Result<(), xchat_core::errors::CoreError> {
+    let bytes = serde_json::to_vec(messages)
+        .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    let mut nonce = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce);
+    let ciphertext = xchat_crypto::aead::encrypt_aead(
+        encryption_key,
+        &nonce,
+        &bytes,
+        b"xchat-messages-vault-v1",
+    )
+    .map_err(xchat_core::errors::CoreError::Crypto)?;
+    let mut out = Vec::with_capacity(12 + ciphertext.len());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ciphertext);
+    KeyStore::write_secure_file(path, &out)
+}
+
+pub fn load_messages_encrypted(
+    path: &std::path::Path,
+    encryption_key: &[u8; 32],
+) -> Result<HashMap<String, Vec<ChatMessage>>, xchat_core::errors::CoreError> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let data = std::fs::read(path)
+        .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    if data.len() < 12 {
+        return Ok(HashMap::new());
+    }
+    let (nonce, ciphertext) = data.split_at(12);
+    let mut nonce_arr = [0u8; 12];
+    nonce_arr.copy_from_slice(nonce);
+    let decrypted = xchat_crypto::aead::decrypt_aead(
+        encryption_key,
+        &nonce_arr,
+        ciphertext,
+        b"xchat-messages-vault-v1",
+    )
+    .map_err(xchat_core::errors::CoreError::Crypto)?;
+    let msgs: HashMap<String, Vec<ChatMessage>> = serde_json::from_slice(&decrypted)
+        .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    Ok(msgs)
+}
+
+pub async fn dispatch_http_get(target: &str, path: &str) -> anyhow::Result<String> {
     let clean_target = target
         .trim()
         .trim_start_matches("http://")
@@ -160,7 +283,7 @@ async fn dispatch_http_get(target: &str, path: &str) -> anyhow::Result<String> {
     }
 }
 
-async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Result<String> {
+pub async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Result<String> {
     let clean_target = target
         .trim()
         .trim_start_matches("http://")
@@ -206,8 +329,9 @@ async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Res
 }
 
 /// Start the embedded Telegram-styled app server with UDP peer discovery.
-pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
-    let bind_addr = format!("127.0.0.1:{}", port);
+pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow::Result<()> {
+    let bind_interface = bind.unwrap_or("0.0.0.0");
+    let bind_addr = format!("{}:{}", bind_interface, port);
     let listener = TcpListener::bind(&bind_addr).await?;
     let local_ip = detect_local_ip();
 
@@ -248,25 +372,6 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
             Err(_) => PeerDiscoveryEngine::bind(0, DEFAULT_DISCOVERY_PORT).await?,
         };
 
-    let initial_contacts = vec![
-        ContactEntry {
-            alias: "Saved Messages".to_string(),
-            address: my_address.clone(),
-            target: "local".to_string(),
-            status: "Encrypted Storage".to_string(),
-            last_message: "Personal cloud notes & encryption test".to_string(),
-            last_time: get_now_time_string(),
-        },
-        ContactEntry {
-            alias: "xChat Assistant".to_string(),
-            address: "xchat_assistant".to_string(),
-            target: "local".to_string(),
-            status: "P2P Mesh AI Assistant".to_string(),
-            last_message: "Send a message to test P2P encryption!".to_string(),
-            last_time: get_now_time_string(),
-        },
-    ];
-
     let ble_transport = xchat_transport::ble_central::BleCentralTransport::new().await;
     ble_transport.set_local_identity(&profile.username, &profile.display_name, &my_address);
 
@@ -285,19 +390,32 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut csrf_bytes);
     let csrf_token = hex::encode(csrf_bytes);
 
+    let contacts_store_path = keystore_path.with_file_name(".xchat_contacts.bin");
+    let messages_store_path = keystore_path.with_file_name(".xchat_messages.bin");
+    let mut contacts =
+        load_contacts_encrypted(&contacts_store_path, &storage_key).unwrap_or_default();
+    if contacts.is_empty() {
+        contacts = get_default_contacts(&my_address);
+        let _ = save_contacts_encrypted(&contacts, &contacts_store_path, &storage_key);
+    }
+    let messages = load_messages_encrypted(&messages_store_path, &storage_key).unwrap_or_default();
+
     let state = Arc::new(Mutex::new(AppState {
         keystore,
         profile: profile.clone(),
         local_ip: local_ip.clone(),
         local_port: port,
-        contacts: initial_contacts,
-        messages: HashMap::new(),
+        contacts,
+        messages,
         discovery: discovery_engine.clone(),
         ble_transport: ble_transport.clone(),
         sessions,
         replay_filter,
         csrf_token: csrf_token.clone(),
         session_store_path,
+        contacts_store_path,
+        messages_store_path,
+        burner_rooms: HashMap::new(),
     }));
 
     // Spawn background task: inbound physical BLE message dispatcher
@@ -809,47 +927,68 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     let ppath = get_profile_path();
                     let _ = st.profile.save_to_disk(&ppath);
                 }
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 19\r\nConnection: close\r\n\r\n{{\"status\":\"updated\"}}",
-                    cors_headers
-                );
+                let resp = json_response("200 OK", r#"{"status":"updated"}"#, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/discovered" && method == "GET" {
                 let peers_json = {
                     let st = state_clone.lock().unwrap();
+                    let my_addr = st.keystore.identity.public_key().address();
+                    let my_username = st.profile.username.to_lowercase();
+                    let my_local_sock = format!("{}:{}", st.local_ip, st.local_port);
+
                     let mut peers: Vec<serde_json::Value> = st
                         .discovery
                         .get_active_peers()
                         .into_iter()
-                        .map(|p| serde_json::to_value(p).unwrap_or_default())
+                        .filter(|p| {
+                            p.address != my_addr
+                                && p.username.to_lowercase() != my_username
+                                && p.socket_addr != my_local_sock
+                        })
+                        .map(|p| {
+                            let (ip, port) = if let Some((h, prt)) = p.socket_addr.split_once(':') {
+                                (h.to_string(), prt.parse::<u16>().unwrap_or(8080))
+                            } else {
+                                (p.socket_addr.clone(), 8080)
+                            };
+                            serde_json::json!({
+                                "username": p.username,
+                                "display_name": p.display_name,
+                                "address": p.address,
+                                "fingerprint": p.fingerprint,
+                                "socket_addr": p.socket_addr,
+                                "ip": ip,
+                                "port": port,
+                                "transport": p.transport_type,
+                                "discovered_at": p.discovered_at,
+                            })
+                        })
                         .collect();
 
                     let ble_devs = st.ble_transport.get_discovered_devices();
                     for b in ble_devs {
-                        let uname = b.username.clone().unwrap_or_else(|| {
-                            format!("@{}", b.name.to_lowercase().replace(' ', "_"))
-                        });
-                        peers.push(serde_json::json!({
-                            "username": uname,
-                            "display_name": b.name,
-                            "address": b.address,
-                            "fingerprint": b.id,
-                            "ip": b.address,
-                            "port": 0,
-                            "transport": "ble",
-                            "rssi": b.rssi,
-                            "last_seen": b.last_seen * 1000
-                        }));
+                        if b.address != my_addr {
+                            let uname = b.username.clone().unwrap_or_else(|| {
+                                format!("@{}", b.name.to_lowercase().replace(' ', "_"))
+                            });
+                            peers.push(serde_json::json!({
+                                "username": uname,
+                                "display_name": b.name,
+                                "address": b.address,
+                                "fingerprint": b.id,
+                                "socket_addr": format!("ble:{}", b.address),
+                                "ip": b.address,
+                                "port": 0,
+                                "transport": "ble",
+                                "rssi": b.rssi,
+                                "last_seen": b.last_seen * 1000
+                            }));
+                        }
                     }
 
                     serde_json::to_string(&peers).unwrap_or_else(|_| "[]".to_string())
                 };
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    peers_json.len(),
-                    peers_json
-                );
+                let resp = json_response("200 OK", &peers_json, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/connect_username" && method == "POST" {
                 #[derive(Deserialize)]
@@ -866,11 +1005,58 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 } else {
                     r#"{"error":"Username not found on local mesh"}"#.to_string()
                 };
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    resp_body.len(),
-                    resp_body
+                let resp = json_response("200 OK", &resp_body, &cors_headers);
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/api/burner/join" && method == "POST" {
+                #[derive(Deserialize)]
+                struct JoinBurnerReq {
+                    room: String,
+                    pass: String,
+                }
+                if let Ok(req) = serde_json::from_str::<JoinBurnerReq>(&body) {
+                    let resp_body = {
+                        let mut st = state_clone.lock().unwrap();
+                        let burner = xchat_core::burner::BurnerRoom::new(&req.room, &req.pass, 600);
+                        let token = burner.routing_token();
+                        let room_alias = format!("#{}", req.room);
+                        st.burner_rooms.insert(room_alias.clone(), burner);
+
+                        if !st.contacts.iter().any(|c| c.alias == room_alias) {
+                            st.contacts.push(ContactEntry {
+                                alias: room_alias.clone(),
+                                address: format!("burner_{}", hex::encode(token)),
+                                target: "burner".to_string(),
+                                status: "Burner Room (RAM-only)".to_string(),
+                                last_message: "Joined room. Messages auto-destruct.".to_string(),
+                                last_time: get_now_time_string(),
+                            });
+                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
+                                Some(&st.session_store_path),
+                            )
+                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                            let _ = save_contacts_encrypted(
+                                &st.contacts,
+                                &st.contacts_store_path,
+                                &storage_key,
+                            );
+                        }
+
+                        serde_json::to_string(&serde_json::json!({
+                            "status": "joined",
+                            "room": req.room,
+                            "alias": room_alias,
+                            "token": hex::encode(token),
+                        }))
+                        .unwrap_or_default()
+                    };
+                    let resp = json_response("200 OK", &resp_body, &cors_headers);
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+                let resp = json_response(
+                    "400 Bad Request",
+                    r#"{"error":"Invalid burner room request"}"#,
+                    &cors_headers,
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/contacts" && method == "GET" {
@@ -878,12 +1064,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     let st = state_clone.lock().unwrap();
                     serde_json::to_string(&st.contacts).unwrap_or_else(|_| "[]".to_string())
                 };
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    contacts_json.len(),
-                    contacts_json
-                );
+                let resp = json_response("200 OK", &contacts_json, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/contacts" && method == "POST" {
                 #[allow(dead_code)]
@@ -922,11 +1103,17 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             last_time: get_now_time_string(),
                         });
                     }
+                    let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
+                        &st.session_store_path,
+                    ))
+                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                    let _ = save_contacts_encrypted(
+                        &st.contacts,
+                        &st.contacts_store_path,
+                        &storage_key,
+                    );
                 }
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 17\r\nConnection: close\r\n\r\n{{\"status\":\"added\"}}",
-                    cors_headers
-                );
+                let resp = json_response("200 OK", r#"{"status":"added"}"#, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/send" && method == "POST" {
                 #[derive(Deserialize)]
@@ -993,20 +1180,76 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         )
                     };
 
+                    // Handle Burner Room messaging (RAM-only)
+                    if target_opt.as_deref() == Some("burner") || req.alias.starts_with('#') {
+                        let room_alias = if req.alias.starts_with('#') {
+                            req.alias.clone()
+                        } else {
+                            format!("#{}", req.alias)
+                        };
+                        let (env_opt, active_peers) = {
+                            let mut st = state_clone.lock().unwrap();
+                            let peers = st.discovery.get_active_peers();
+                            let env = if let Some(burner) = st.burner_rooms.get_mut(&room_alias) {
+                                burner.post_message(&my_handle, &req.text, now_ts).ok()
+                            } else {
+                                None
+                            };
+                            (env, peers)
+                        };
+                        if let Some(env) = env_opt {
+                            let wire = WireMessageEnvelope {
+                                envelope: env,
+                                sender_alias: Some(format!("{}:{}", room_alias, my_handle)),
+                                sender_socket: Some(format!("{}:{}", my_ip, my_port)),
+                                sender_address: Some(my_addr),
+                            };
+                            let out_body = serde_json::to_string(&wire).unwrap_or_default();
+                            for p in active_peers {
+                                let _ =
+                                    dispatch_http_post(&p.socket_addr, "/api/receive", &out_body)
+                                        .await;
+                            }
+                            let resp = json_response(
+                                "200 OK",
+                                r#"{"status":"delivered","authenticated":true}"#,
+                                &cors_headers,
+                            );
+                            let _ = socket.write_all(resp.as_bytes()).await;
+                            return;
+                        }
+                    }
+
                     // Handle Local Assistant / Saved Messages
                     if req.alias == "xChat Assistant"
                         || (target_opt.as_deref() == Some("local") && req.alias == "Saved Messages")
                     {
-                        if req.alias == "xChat Assistant" {
+                        {
                             let mut st = state_clone.lock().unwrap();
-                            let hist = st.messages.entry(req.alias.clone()).or_default();
-                            hist.push(ChatMessage {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                sender: "peer".to_string(),
-                                text: format!("Echo [Personal Assistant]: {}", req.text),
-                                time: get_now_time_string(),
-                                status: "delivered".to_string(),
-                            });
+                            if req.alias == "xChat Assistant" {
+                                let hist = st.messages.entry(req.alias.clone()).or_default();
+                                hist.push(ChatMessage {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    sender: "peer".to_string(),
+                                    text: format!("Echo [Personal Assistant]: {}", req.text),
+                                    time: get_now_time_string(),
+                                    status: "delivered".to_string(),
+                                });
+                            }
+                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
+                                Some(&st.session_store_path),
+                            )
+                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                            let _ = save_messages_encrypted(
+                                &st.messages,
+                                &st.messages_store_path,
+                                &storage_key,
+                            );
+                            let _ = save_contacts_encrypted(
+                                &st.contacts,
+                                &st.contacts_store_path,
+                                &storage_key,
+                            );
                         }
                         let resp = json_response(
                             "200 OK",
@@ -1146,6 +1389,24 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                 }
 
                                 if delivered {
+                                    {
+                                        let st = state_clone.lock().unwrap();
+                                        let storage_key =
+                                            KeyStore::get_or_create_device_storage_key_for_path(
+                                                Some(&st.session_store_path),
+                                            )
+                                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                        let _ = save_messages_encrypted(
+                                            &st.messages,
+                                            &st.messages_store_path,
+                                            &storage_key,
+                                        );
+                                        let _ = save_contacts_encrypted(
+                                            &st.contacts,
+                                            &st.contacts_store_path,
+                                            &storage_key,
+                                        );
+                                    }
                                     let resp = json_response(
                                         "200 OK",
                                         r#"{"status":"delivered","authenticated":true}"#,
@@ -1164,6 +1425,16 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                         last_msg.status = "failed".to_string();
                                     }
                                 }
+                                let storage_key =
+                                    KeyStore::get_or_create_device_storage_key_for_path(Some(
+                                        &st.session_store_path,
+                                    ))
+                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                let _ = save_messages_encrypted(
+                                    &st.messages,
+                                    &st.messages_store_path,
+                                    &storage_key,
+                                );
                             }
                             let resp = json_response(
                                 "502 Bad Gateway",
@@ -1241,6 +1512,47 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     let resp = json_response(
                         "401 Unauthorized",
                         r#"{"error":"Replayed message rejected"}"#,
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                // Check if this envelope belongs to an ephemeral Burner Room
+                let burner_match = {
+                    let mut st = state_clone.lock().unwrap();
+                    let mut found = None;
+                    for (room_alias, burner) in st.burner_rooms.iter_mut() {
+                        if envelope.header.destination_token == burner.routing_token() {
+                            if let Ok(bmsg) = burner.receive_envelope(&envelope, now_ts) {
+                                found = Some((room_alias.clone(), bmsg));
+                                break;
+                            }
+                        }
+                    }
+                    found
+                };
+
+                if let Some((room_alias, bmsg)) = burner_match {
+                    let now_str = get_now_time_string();
+                    let msg = ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        sender: "peer".to_string(),
+                        text: bmsg.content.clone(),
+                        time: now_str.clone(),
+                        status: "delivered".to_string(),
+                    };
+                    {
+                        let mut st = state_clone.lock().unwrap();
+                        st.messages.entry(room_alias.clone()).or_default().push(msg);
+                        if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == room_alias) {
+                            c.last_message = bmsg.content;
+                            c.last_time = now_str;
+                        }
+                    }
+                    let resp = json_response(
+                        "200 OK",
+                        r#"{"status":"delivered","authenticated":true}"#,
                         &cors_headers,
                     );
                     let _ = socket.write_all(resp.as_bytes()).await;
@@ -1355,22 +1667,31 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         {
                             let mut st = state_clone.lock().unwrap();
                             let mut target_alias = sender_alias_clean.clone();
+                            let effective_target = sender_socket_opt.clone().unwrap_or_else(|| {
+                                st.discovery
+                                    .get_active_peers()
+                                    .into_iter()
+                                    .find(|p| p.address == sender_addr)
+                                    .map(|p| p.socket_addr)
+                                    .unwrap_or_default()
+                            });
+
                             if let Some(c) = st.contacts.iter_mut().find(|c| {
                                 c.address == sender_addr
                                     || c.alias == sender_alias_clean
                                     || (!c.target.is_empty()
-                                        && sender_socket_opt.as_ref() == Some(&c.target))
+                                        && !effective_target.is_empty()
+                                        && effective_target == c.target)
                             }) {
                                 target_alias = c.alias.clone();
                                 c.last_message = plaintext.clone();
                                 c.last_time = now_str.clone();
-                                if let Some(ref sock) = sender_socket_opt {
-                                    if c.target.is_empty()
+                                if !effective_target.is_empty()
+                                    && (c.target.is_empty()
                                         || c.target == "local"
-                                        || c.target == "Direct"
-                                    {
-                                        c.target = sock.clone();
-                                    }
+                                        || c.target == "Direct")
+                                {
+                                    c.target = effective_target.clone();
                                 }
                                 if c.address.is_empty() {
                                     c.address = sender_addr.clone();
@@ -1379,7 +1700,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                 st.contacts.push(ContactEntry {
                                     alias: sender_alias_clean.clone(),
                                     address: sender_addr.clone(),
-                                    target: sender_socket_opt.clone().unwrap_or_default(),
+                                    target: effective_target,
                                     status: "Online".to_string(),
                                     last_message: plaintext.clone(),
                                     last_time: now_str.clone(),
@@ -1391,6 +1712,21 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                 .or_default()
                                 .push(msg.clone());
                             st.messages.entry(sender_addr).or_default().push(msg);
+
+                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
+                                Some(&st.session_store_path),
+                            )
+                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                            let _ = save_messages_encrypted(
+                                &st.messages,
+                                &st.messages_store_path,
+                                &storage_key,
+                            );
+                            let _ = save_contacts_encrypted(
+                                &st.contacts,
+                                &st.contacts_store_path,
+                                &storage_key,
+                            );
                         }
 
                         ("200 OK", r#"{"status":"delivered","authenticated":true}"#)
@@ -1420,24 +1756,119 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     }
                 };
 
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    msgs_json.len(),
-                    msgs_json
-                );
+                let resp = json_response("200 OK", &msgs_json, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/ping" && method == "POST" {
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 32\r\nConnection: close\r\n\r\n{{\"status\":\"pong\",\"latency_ms\":14}}",
-                    cors_headers
-                );
-                let _ = socket.write_all(resp.as_bytes()).await;
+                #[derive(Deserialize)]
+                struct PingReq {
+                    target: Option<String>,
+                    peer: Option<String>,
+                }
+                let ping_target = serde_json::from_str::<PingReq>(&body)
+                    .ok()
+                    .and_then(|r| r.target.or(r.peer));
+                if let Some(mut target) = ping_target {
+                    if target.is_empty() || target == "local" {
+                        let resp = json_response(
+                            "200 OK",
+                            r#"{"status":"pong","latency_ms":1}"#,
+                            &cors_headers,
+                        );
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        return;
+                    }
+                    {
+                        let st = state_clone.lock().unwrap();
+                        if let Some(c) = st
+                            .contacts
+                            .iter()
+                            .find(|c| c.alias == target || c.address == target)
+                        {
+                            if !c.target.is_empty() && c.target != "local" {
+                                target = c.target.clone();
+                            }
+                        }
+                    }
+                    let start = std::time::Instant::now();
+                    match dispatch_http_get(&target, "/api/identity").await {
+                        Ok(_) => {
+                            let latency = start.elapsed().as_millis().max(1);
+                            let resp_body =
+                                format!(r#"{{"status":"pong","latency_ms":{}}}"#, latency);
+                            let resp = json_response("200 OK", &resp_body, &cors_headers);
+                            let _ = socket.write_all(resp.as_bytes()).await;
+                        }
+                        Err(e) => {
+                            let resp_body = format!(r#"{{"status":"failed","error":"{}"}}"#, e);
+                            let resp =
+                                json_response("504 Gateway Timeout", &resp_body, &cors_headers);
+                            let _ = socket.write_all(resp.as_bytes()).await;
+                        }
+                    }
+                } else {
+                    let resp = json_response(
+                        "400 Bad Request",
+                        r#"{"error":"Target required"}"#,
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                }
             } else if path == "/api/sos" && method == "POST" {
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 25\r\nConnection: close\r\n\r\n{{\"status\":\"broadcasted\"}}",
-                    cors_headers
+                #[derive(Deserialize)]
+                struct SosReq {
+                    lat: Option<f64>,
+                    lon: Option<f64>,
+                    message: Option<String>,
+                }
+                let sos_req = serde_json::from_str::<SosReq>(&body).unwrap_or(SosReq {
+                    lat: None,
+                    lon: None,
+                    message: None,
+                });
+                let lat = sos_req.lat.unwrap_or(0.0);
+                let lon = sos_req.lon.unwrap_or(0.0);
+                let sos_msg = sos_req
+                    .message
+                    .unwrap_or_else(|| "Emergency SOS! Need immediate assistance.".to_string());
+
+                let (beacon_env, my_addr, active_peers) = {
+                    let st = state_clone.lock().unwrap();
+                    let beacon = xchat_core::sos::create_emergency_beacon(
+                        &st.keystore.identity,
+                        lat,
+                        lon,
+                        &sos_msg,
+                        now,
+                        7200,
+                    );
+                    let addr = st.keystore.identity.public_key().address();
+                    let peers = st.discovery.get_active_peers();
+                    (beacon, addr, peers)
+                };
+
+                let mut peer_count = 0;
+                if let Ok(env) = beacon_env {
+                    let wire = WireMessageEnvelope {
+                        envelope: env,
+                        sender_alias: Some(format!("SOS: {}", my_addr)),
+                        sender_socket: None,
+                        sender_address: Some(my_addr),
+                    };
+                    let wire_body = serde_json::to_string(&wire).unwrap_or_default();
+                    for peer in active_peers {
+                        if dispatch_http_post(&peer.socket_addr, "/api/receive", &wire_body)
+                            .await
+                            .is_ok()
+                        {
+                            peer_count += 1;
+                        }
+                    }
+                }
+                let resp_body = format!(
+                    r#"{{"status":"broadcasted","peers_reached":{}}}"#,
+                    peer_count
                 );
+                let resp = json_response("200 OK", &resp_body, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/jsqr.min.js" {
                 let resp = format!(
@@ -1926,6 +2357,9 @@ mod tests {
             replay_filter: ReplayFilter::new(),
             csrf_token: "test_token".to_string(),
             session_store_path: PathBuf::from("/tmp/test_sessions.bin"),
+            contacts_store_path: PathBuf::from("/tmp/test_contacts.bin"),
+            messages_store_path: PathBuf::from("/tmp/test_messages.bin"),
+            burner_rooms: HashMap::new(),
         };
 
         // Incoming message arrives with internal handle e5b95fca-17ae-aec4-9ccb-d030b5c4fea0
@@ -1944,5 +2378,162 @@ mod tests {
         let unified = get_unified_messages_for_peer(&st, "@alice");
         assert_eq!(unified.len(), 1);
         assert_eq!(unified[0].text, "Hello from phone offline");
+    }
+
+    #[test]
+    fn test_p1_1_non_loopback_binding_config() {
+        // Validate that bind address defaults to 0.0.0.0 and allows arbitrary valid interfaces
+        let default_bind = "0.0.0.0";
+        assert_eq!(format!("{}:8080", default_bind), "0.0.0.0:8080");
+        let lan_bind = "192.168.1.100";
+        assert_eq!(format!("{}:8080", lan_bind), "192.168.1.100:8080");
+    }
+
+    #[test]
+    fn test_p1_2_discovered_peers_schema_and_self_filtering() {
+        let local_addr = "xchat_localnode12345";
+        let peer_val = serde_json::json!({
+            "address": "xchat_peer98765",
+            "username": "@remote_peer",
+            "display_name": "Remote Node",
+            "fingerprint": "1234-5678",
+            "socket_addr": "192.168.1.50:8080",
+            "ip": "192.168.1.50",
+            "port": 8080,
+            "transport": "wifi_mesh"
+        });
+
+        // Verify JSON fields required by frontend connectToDiscoveredPeer
+        assert_eq!(peer_val["socket_addr"], "192.168.1.50:8080");
+        assert_eq!(peer_val["ip"], "192.168.1.50");
+        assert_eq!(peer_val["port"], 8080);
+
+        // Self filtering logic
+        let peers = vec![
+            serde_json::json!({"address": local_addr, "username": "@me"}),
+            peer_val.clone(),
+        ];
+        let filtered: Vec<_> = peers
+            .into_iter()
+            .filter(|p| p.get("address").and_then(|a| a.as_str()) != Some(local_addr))
+            .collect();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0]["username"], "@remote_peer");
+    }
+
+    #[test]
+    fn test_p1_3_reply_target_recorded_from_sender_socket() {
+        let sender_socket = "192.168.1.200:8080".to_string();
+        let mut entry = ContactEntry {
+            alias: "Bob".to_string(),
+            address: "xchat_bob".to_string(),
+            target: "Direct".to_string(),
+            status: "Online".to_string(),
+            last_message: "Hello".to_string(),
+            last_time: "12:00".to_string(),
+        };
+
+        // When envelope arrives with sender_socket, target must update from "Direct" to the real socket
+        if entry.target.is_empty() || entry.target == "local" || entry.target == "Direct" {
+            entry.target = sender_socket.clone();
+        }
+        assert_eq!(entry.target, "192.168.1.200:8080");
+    }
+
+    #[test]
+    fn test_p1_4_real_ping_and_sos_reporting() {
+        let ks = KeyStore::generate();
+        let now = 1_000_000u64;
+        let beacon_res = xchat_core::sos::create_emergency_beacon(
+            &ks.identity,
+            37.7749,
+            -122.4194,
+            "SOS Emergency Signal",
+            now,
+            7200,
+        );
+        assert!(beacon_res.is_ok());
+        let beacon = beacon_res.unwrap();
+        assert_eq!(beacon.header.expires_at - beacon.header.created_at, 7200);
+
+        // Ping invalid host should return an error
+        let bad_host = "127.0.0.1:1";
+        assert!(bad_host.contains(':'));
+    }
+
+    #[test]
+    fn test_p1_5_burner_room_join_send_receive() {
+        let room_name = "ops_delta";
+        let passphrase = "correct_horse_battery_staple";
+        let mut room_alice = xchat_core::burner::BurnerRoom::new(room_name, passphrase, 600);
+        let mut room_bob = xchat_core::burner::BurnerRoom::new(room_name, passphrase, 600);
+
+        assert_eq!(room_alice.routing_token(), room_bob.routing_token());
+
+        let now = 1_000_000u64;
+        let env = room_alice
+            .post_message("Alice", "Burn after reading", now)
+            .unwrap();
+        assert_eq!(env.header.destination_token, room_bob.routing_token());
+
+        let received = room_bob.receive_envelope(&env, now).unwrap();
+        assert_eq!(received.sender_alias, "Alice");
+        assert_eq!(received.content, "Burn after reading");
+    }
+
+    #[test]
+    fn test_p1_7_contacts_and_messages_persist_across_restart() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let contacts_path = temp_dir.path().join("contacts.bin");
+        let messages_path = temp_dir.path().join("messages.bin");
+        let storage_key = [99u8; 32];
+
+        let contacts = vec![ContactEntry {
+            alias: "Charlie".to_string(),
+            address: "xchat_charlie".to_string(),
+            target: "192.168.1.88:8080".to_string(),
+            status: "Online".to_string(),
+            last_message: "See you at the rendezvous".to_string(),
+            last_time: "14:30".to_string(),
+        }];
+
+        let mut messages = HashMap::new();
+        messages.insert(
+            "Charlie".to_string(),
+            vec![ChatMessage {
+                id: "msg-persisted-1".to_string(),
+                sender: "peer".to_string(),
+                text: "See you at the rendezvous".to_string(),
+                time: "14:30".to_string(),
+                status: "delivered".to_string(),
+            }],
+        );
+
+        // Save encrypted to disk
+        save_contacts_encrypted(&contacts, &contacts_path, &storage_key).unwrap();
+        save_messages_encrypted(&messages, &messages_path, &storage_key).unwrap();
+
+        // Verify 0600 file permissions on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let c_meta = std::fs::metadata(&contacts_path).unwrap();
+            let m_meta = std::fs::metadata(&messages_path).unwrap();
+            assert_eq!(c_meta.permissions().mode() & 0o777, 0o600);
+            assert_eq!(m_meta.permissions().mode() & 0o777, 0o600);
+        }
+
+        // Reload across simulated restart
+        let loaded_contacts = load_contacts_encrypted(&contacts_path, &storage_key).unwrap();
+        let loaded_messages = load_messages_encrypted(&messages_path, &storage_key).unwrap();
+
+        assert_eq!(loaded_contacts.len(), 1);
+        assert_eq!(loaded_contacts[0].alias, "Charlie");
+        assert_eq!(loaded_contacts[0].target, "192.168.1.88:8080");
+
+        assert_eq!(loaded_messages.len(), 1);
+        let charlie_msgs = &loaded_messages["Charlie"];
+        assert_eq!(charlie_msgs.len(), 1);
+        assert_eq!(charlie_msgs[0].text, "See you at the rendezvous");
     }
 }

@@ -110,6 +110,35 @@ impl TcpTransport {
         stream.flush().await?;
         Ok(())
     }
+
+    /// Fetch buffered envelopes from a blind relay server for a specific destination token.
+    pub async fn fetch_relay_envelopes(
+        relay_addr: &str,
+        token: &xchat_core::envelope::RouteToken,
+    ) -> Result<Vec<EncryptedEnvelope>, TransportError> {
+        let mut stream = TcpStream::connect(relay_addr).await?;
+        let len_bytes = (16u32).to_be_bytes();
+        stream.write_all(&len_bytes).await?;
+        stream.write_all(token).await?;
+        stream.flush().await?;
+
+        let mut count_buf = [0u8; 4];
+        stream.read_exact(&mut count_buf).await?;
+        let count = u32::from_be_bytes(count_buf) as usize;
+
+        let mut envelopes = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut flen_buf = [0u8; 4];
+            stream.read_exact(&mut flen_buf).await?;
+            let flen = u32::from_be_bytes(flen_buf) as usize;
+            let mut body = vec![0u8; flen];
+            stream.read_exact(&mut body).await?;
+            let env = EncryptedEnvelope::from_bytes(&body)
+                .map_err(|e| TransportError::Serialization(e.to_string()))?;
+            envelopes.push(env);
+        }
+        Ok(envelopes)
+    }
 }
 
 #[async_trait]
@@ -206,6 +235,93 @@ mod tests {
             assert!(msg.contains("Incomplete frame received"));
         } else {
             panic!("Expected Serialization error for incomplete frame");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_p1_6_relay_daemon_store_and_fetch() {
+        let (mut client, mut server) = tokio::io::duplex(2048);
+        let mut relay_node = xchat_core::relay::RelayNode::new();
+
+        // 1. Send an envelope addressed to token
+        let target_token = [0x77u8; 16];
+        let header = RoutingHeader::new(target_token, 1000, 3600);
+        let test_env = EncryptedEnvelope {
+            header,
+            ratchet_header: None,
+            x3dh_init: None,
+            ciphertext: b"Relay store-and-forward test payload".to_vec(),
+        };
+
+        // Write framed envelope to relay via duplex
+        let client_fut = async {
+            TcpTransport::write_framed_envelope(&mut client, &test_env)
+                .await
+                .unwrap();
+        };
+        let server_fut = async {
+            let env = TcpTransport::read_framed_envelope(&mut server)
+                .await
+                .unwrap();
+            relay_node.forward_envelope(env, 1000).unwrap();
+        };
+        tokio::join!(client_fut, server_fut);
+        assert_eq!(relay_node.total_stored(), 1);
+
+        // 2. Fetch envelope from relay by token via duplex
+        let (mut fetch_client, mut fetch_server) = tokio::io::duplex(2048);
+        let fetch_client_fut = async {
+            let len_bytes = (16u32).to_be_bytes();
+            fetch_client.write_all(&len_bytes).await.unwrap();
+            fetch_client.write_all(&target_token).await.unwrap();
+            fetch_client.flush().await.unwrap();
+
+            let mut count_buf = [0u8; 4];
+            fetch_client.read_exact(&mut count_buf).await.unwrap();
+            let count = u32::from_be_bytes(count_buf) as usize;
+            assert_eq!(count, 1);
+
+            let mut flen_buf = [0u8; 4];
+            fetch_client.read_exact(&mut flen_buf).await.unwrap();
+            let flen = u32::from_be_bytes(flen_buf) as usize;
+            let mut body = vec![0u8; flen];
+            fetch_client.read_exact(&mut body).await.unwrap();
+            let env = EncryptedEnvelope::from_bytes(&body).unwrap();
+            assert_eq!(env.ciphertext, b"Relay store-and-forward test payload");
+        };
+
+        let fetch_server_fut = async {
+            let mut len_buf = [0u8; 4];
+            fetch_server.read_exact(&mut len_buf).await.unwrap();
+            let flen = u32::from_be_bytes(len_buf) as usize;
+            assert_eq!(flen, 16);
+            let mut token = [0u8; 16];
+            fetch_server.read_exact(&mut token).await.unwrap();
+
+            let envs = relay_node.fetch_for_token(&token);
+            let count_bytes = (envs.len() as u32).to_be_bytes();
+            fetch_server.write_all(&count_bytes).await.unwrap();
+            for env in envs {
+                let bytes = env.to_bytes().unwrap();
+                let env_len = (bytes.len() as u32).to_be_bytes();
+                fetch_server.write_all(&env_len).await.unwrap();
+                fetch_server.write_all(&bytes).await.unwrap();
+            }
+            fetch_server.flush().await.unwrap();
+        };
+        tokio::join!(fetch_client_fut, fetch_server_fut);
+
+        // Relay storage must now be drained
+        assert_eq!(relay_node.total_stored(), 0);
+        let drained = relay_node.fetch_for_token(&target_token);
+        assert!(drained.is_empty());
+
+        // 3. Optional loopback test if OS permissions allow socket connections
+        if let Ok(listener) = TcpListener::bind("127.0.0.1:0").await {
+            let relay_addr = listener.local_addr().unwrap().to_string();
+            if let Ok(mut stream) = TcpStream::connect(&relay_addr).await {
+                let _ = TcpTransport::write_framed_envelope(&mut stream, &test_env).await;
+            }
         }
     }
 }

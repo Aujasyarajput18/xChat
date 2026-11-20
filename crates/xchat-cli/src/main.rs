@@ -5,6 +5,7 @@ mod gui;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::AsyncBufReadExt;
 use xchat_core::{
     burner::BurnerRoom,
     contacts::ContactBook,
@@ -44,6 +45,9 @@ enum Commands {
         /// Local port for embedded app server (e.g. 8080)
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
+        /// Host or network interface to bind listener on (e.g. 0.0.0.0 or 127.0.0.1)
+        #[arg(short, long, default_value = "0.0.0.0")]
+        bind: String,
     },
 
     /// Alias for `app` (launches lightweight Graphical User Interface in browser)
@@ -51,6 +55,9 @@ enum Commands {
         /// Local port for embedded app server (e.g. 8080)
         #[arg(short, long, default_value_t = 8080)]
         port: u16,
+        /// Host or network interface to bind listener on (e.g. 0.0.0.0 or 127.0.0.1)
+        #[arg(short, long, default_value = "0.0.0.0")]
+        bind: String,
     },
 
     /// Generate a fresh cryptographic identity and export public prekey bundle
@@ -61,6 +68,9 @@ enum Commands {
         /// TCP port to bind listener on (e.g. 7000)
         #[arg(short, long, default_value_t = 7000)]
         port: u16,
+        /// Host or network interface to bind listener on (e.g. 0.0.0.0 or 127.0.0.1)
+        #[arg(short, long, default_value = "0.0.0.0")]
+        bind: String,
         /// Run in blind relay mode (routes and buffers opaque envelopes without plaintext access)
         #[arg(short, long)]
         relay: bool,
@@ -87,6 +97,12 @@ enum Commands {
             default_value = "Emergency SOS! Need immediate assistance."
         )]
         message: String,
+        /// Latitude coordinate
+        #[arg(long, default_value_t = 0.0)]
+        lat: f64,
+        /// Longitude coordinate
+        #[arg(long, default_value_t = 0.0)]
+        lon: f64,
     },
 
     /// Join an ephemeral RAM-only Burner Room (leaves 0 traces on disk)
@@ -198,41 +214,92 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::App { port } | Commands::Gui { port } => {
-            gui::start_embedded_app_server(port).await?;
+        Commands::App { port, bind } | Commands::Gui { port, bind } => {
+            gui::start_embedded_app_server(port, Some(&bind)).await?;
         }
 
-        Commands::Sos { message } => {
+        Commands::Sos { message, lat, lon } => {
             let keystore_path = crate::gui::get_keystore_path();
             let keystore =
                 KeyStore::load_or_generate(&keystore_path).unwrap_or_else(|_| KeyStore::generate());
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_secs();
-            let beacon_env = create_emergency_beacon(
-                &keystore.identity,
-                37.7749,
-                -122.4194,
-                &message,
-                now,
-                7200,
-            )?;
+            let beacon_env =
+                create_emergency_beacon(&keystore.identity, lat, lon, &message, now, 7200)?;
+            let raw_beacon = beacon_env
+                .to_bytes()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
             println!("🚨 Emergency SOS Beacon Generated!");
             println!("Sender:    {}", keystore.identity.public_key().address());
+            println!("Coords:    ({}, {})", lat, lon);
             println!("Message:   \"{}\"", message);
             println!(
                 "Envelope:  ID={} DestToken={}",
                 hex::encode(beacon_env.header.message_id),
                 hex::encode(beacon_env.header.destination_token)
             );
-            println!("[Mesh] Broadcasted over 2.4 GHz physical radio mesh with MAXIMUM priority.");
+            let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await;
+            let mut sent_bytes = 0;
+            if let Ok(socket) = udp {
+                let _ = socket.set_broadcast(true);
+                let broadcast_addr = format!("255.255.255.255:{}", DEFAULT_DISCOVERY_PORT);
+                if let Ok(n) = socket.send_to(&raw_beacon, &broadcast_addr).await {
+                    sent_bytes = n;
+                }
+            }
+            println!(
+                "[Mesh] Broadcasted {} bytes over UDP port {} with MAXIMUM priority.",
+                sent_bytes, DEFAULT_DISCOVERY_PORT
+            );
         }
 
         Commands::Burner { room, pass } => {
-            println!("🔥 Ephemeral Burner Mesh Room Active: '{}'", room);
-            let burner = BurnerRoom::new(&room, &pass, 300);
+            println!("🔥 Joined Ephemeral Burner Mesh Room: '#{}'", room);
+            let mut burner = BurnerRoom::new(&room, &pass, 300);
             println!("Routing Token: {}", hex::encode(burner.routing_token()));
             println!("Security:      RAM-ONLY, zero disk persistence. Auto-expires in 300s.");
+            println!("[Mesh] Ready to chat. Type a message and press Enter (or '/quit' to exit):");
+
+            let discovery = PeerDiscoveryEngine::bind(0, 0).await?;
+            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let trimmed = line.trim();
+                if trimmed == "/quit" || trimmed == "/exit" {
+                    println!("Leaving burner room '{}'...", room);
+                    break;
+                }
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs();
+                if let Ok(env) = burner.post_message("CLI_User", trimmed, now) {
+                    let active_peers = discovery.get_active_peers();
+                    let wire = crate::gui::WireMessageEnvelope {
+                        envelope: env,
+                        sender_alias: Some(format!("#{}", room)),
+                        sender_socket: None,
+                        sender_address: None,
+                    };
+                    let wire_body = serde_json::to_string(&wire).unwrap_or_default();
+                    let mut sent = 0;
+                    for p in active_peers {
+                        if crate::gui::dispatch_http_post(
+                            &p.socket_addr,
+                            "/api/receive",
+                            &wire_body,
+                        )
+                        .await
+                        .is_ok()
+                        {
+                            sent += 1;
+                        }
+                    }
+                    println!("Sent to {} peers.", sent);
+                }
+            }
         }
 
         Commands::Mixnet { batch_size, cover } => {
@@ -430,8 +497,8 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
-        Commands::Daemon { port, relay } => {
-            let bind_addr = format!("127.0.0.1:{}", port);
+        Commands::Daemon { port, bind, relay } => {
+            let bind_addr = format!("{}:{}", bind, port);
             println!("=======================================================");
             println!("   Starting xChat Node Daemon on {}", bind_addr);
             println!(
@@ -444,41 +511,69 @@ async fn main() -> anyhow::Result<()> {
             );
             println!("=======================================================");
 
-            let tcp = TcpTransport::bind(&bind_addr).await?;
-            println!("[+] TCP Transport active on {}", tcp.local_addr());
-
             if relay {
-                let mut relay_node = RelayNode::new();
-                println!("[+] Blind Relay ready. Listening for envelopes...");
-                loop {
-                    match tcp.receive_envelope().await {
-                        Ok(env) => {
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)?
-                                .as_secs();
-                            let msg_id = hex::encode(env.header.message_id);
-                            let dest = hex::encode(env.header.destination_token);
-                            println!(
-                                "[Relay] Received opaque envelope ID={} DestToken={} Hops={}",
-                                msg_id, dest, env.header.hop_count
-                            );
-
-                            if let Err(e) = relay_node.forward_envelope(env, now) {
-                                eprintln!("[Relay] Forwarding error: {}", e);
-                            } else {
-                                println!(
-                                    "[Relay] Envelope stored safely. Total buffered: {}",
-                                    relay_node.total_stored()
-                                );
+                let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+                println!("[+] Blind Relay active on {}", listener.local_addr()?);
+                println!("[+] Blind Relay ready. Listening for envelopes and fetch requests...");
+                let relay_node = std::sync::Arc::new(tokio::sync::Mutex::new(RelayNode::new()));
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    let relay_ref = relay_node.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                        let mut len_buf = [0u8; 4];
+                        if socket.read_exact(&mut len_buf).await.is_err() {
+                            return;
+                        }
+                        let flen = u32::from_be_bytes(len_buf) as usize;
+                        if flen == 16 {
+                            // RouteToken fetch request
+                            let mut token = [0u8; 16];
+                            if socket.read_exact(&mut token).await.is_err() {
+                                return;
+                            }
+                            let envs = {
+                                let mut rn = relay_ref.lock().await;
+                                rn.fetch_for_token(&token)
+                            };
+                            let count_bytes = (envs.len() as u32).to_be_bytes();
+                            if socket.write_all(&count_bytes).await.is_err() {
+                                return;
+                            }
+                            for env in envs {
+                                if let Ok(bytes) = env.to_bytes() {
+                                    let env_len = (bytes.len() as u32).to_be_bytes();
+                                    let _ = socket.write_all(&env_len).await;
+                                    let _ = socket.write_all(&bytes).await;
+                                }
+                            }
+                            let _ = socket.flush().await;
+                        } else if flen > 0 && flen <= xchat_transport::MAX_ENVELOPE_FRAME_SIZE {
+                            let mut body = vec![0u8; flen];
+                            if socket.read_exact(&mut body).await.is_ok() {
+                                if let Ok(env) = EncryptedEnvelope::from_bytes(&body) {
+                                    let now = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_secs();
+                                    let msg_id = hex::encode(env.header.message_id);
+                                    let dest = hex::encode(env.header.destination_token);
+                                    let mut rn = relay_ref.lock().await;
+                                    if let Err(e) = rn.forward_envelope(env, now) {
+                                        eprintln!("[Relay] Forwarding error: {}", e);
+                                    } else {
+                                        println!(
+                                            "[Relay] Envelope stored safely: ID={} DestToken={} Total buffered: {}",
+                                            msg_id, dest, rn.total_stored()
+                                        );
+                                    }
+                                }
                             }
                         }
-                        Err(e) => {
-                            eprintln!("[Relay] Transport read error: {}", e);
-                            break;
-                        }
-                    }
+                    });
                 }
             } else {
+                let tcp = TcpTransport::bind(&bind_addr).await?;
+                println!("[+] TCP Transport active on {}", tcp.local_addr());
                 let keystore_path = crate::gui::get_keystore_path();
                 let mut keystore = KeyStore::load_or_generate(&keystore_path)
                     .unwrap_or_else(|_| KeyStore::generate());
@@ -661,9 +756,53 @@ async fn main() -> anyhow::Result<()> {
 
         Commands::Ping { target } => {
             println!("Pinging target '{}' across local physical links...", target);
-            println!("[Transport] Broadcasting ephemeral token on 2.4 GHz radio...");
-            println!("[Result] Status: ACTIVE / DIRECTLY REACHABLE (Latency: 14ms over Bluetooth LE / LAN)");
-            println!("[Privacy] Zero sender metadata was exposed in ping envelope.");
+            let mut resolved_addr = target.clone();
+            let contacts_path = get_default_contacts_path();
+            if let Ok(book) = ContactBook::load_from_disk(&contacts_path) {
+                if let Some(c) = book.get(&target) {
+                    if !c.address.is_empty() {
+                        resolved_addr = c.address.clone();
+                    }
+                }
+            }
+            let host = if resolved_addr.contains(':') {
+                resolved_addr.clone()
+            } else {
+                format!("{}:8080", resolved_addr)
+            };
+            let start = std::time::Instant::now();
+            let connect_fut = tokio::net::TcpStream::connect(&host);
+            match tokio::time::timeout(tokio::time::Duration::from_secs(2), connect_fut).await {
+                Ok(Ok(mut stream)) => {
+                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                    let req = format!(
+                        "GET /api/identity HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                        host
+                    );
+                    if stream.write_all(req.as_bytes()).await.is_ok() {
+                        let mut buf = [0u8; 1024];
+                        if stream.read(&mut buf).await.is_ok() {
+                            let latency = start.elapsed().as_millis().max(1);
+                            println!(
+                                "[Result] Status: ACTIVE / DIRECTLY REACHABLE (Latency: {}ms)",
+                                latency
+                            );
+                            return Ok(());
+                        }
+                    }
+                    let latency = start.elapsed().as_millis().max(1);
+                    println!(
+                        "[Result] Status: ACTIVE / TCP CONNECTED (Latency: {}ms)",
+                        latency
+                    );
+                }
+                _ => {
+                    println!(
+                        "[Result] Status: UNREACHABLE / TIMEOUT (Target '{}' did not respond)",
+                        target
+                    );
+                }
+            }
         }
 
         Commands::Profile {

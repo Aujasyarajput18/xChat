@@ -24,4 +24,5 @@ pub use discovery::{DiscoveryBeacon, PeerDiscoveryEngine, DEFAULT_DISCOVERY_PORT
 pub use errors::TransportError;
 pub use mixnet_transport::MixnetTransport;
 pub use sms::SmsCarrier;
+pub use tcp::{TcpTransport, MAX_ENVELOPE_FRAME_SIZE};
 pub use traits::{Transport, TransportType};
