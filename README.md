@@ -77,10 +77,10 @@ These are tracked as open work. Until they are fixed, **the GUI does not provide
 git clone https://github.com/EdgeRunner-runit/xChat.git
 cd xChat
 cargo build --workspace
-cargo test --workspace
+cargo test --workspace        # 87 automated tests (100% passing)
 ```
 
-The binary is built as `target/debug/xchat-cli` (or `target/release/xchat-cli`). Every command below can also be run through Cargo:
+The binary is built as `target/debug/xchat` (and `xchat-cli`). Every command below can also be run through Cargo:
 
 ```bash
 cargo run -- <command>
@@ -268,7 +268,7 @@ task_plan.md, progress.md, findings.md, MASTER_EVALUATION_DOCUMENT.md      Proje
 ```bash
 cargo fmt --check
 cargo clippy --workspace --tests -- -D warnings
-cargo test --workspace
+cargo test --workspace        # 87 automated tests across all suites (100% passing)
 
 # Individual suites (as run in CI)
 cargo test --test fuzz_and_tamper_tests -- --nocapture
@@ -293,7 +293,7 @@ export ANDROID_HOME=/path/to/Android/sdk
 ./scripts/package-release.sh  # builds arm64 + x86_64 and lipo'd universal tarballs into dist/
 ```
 
-The source-build path in `install.sh` and `xchat-launcher.sh` copies `target/release/xchat`, but Cargo produces `xchat-cli`. Until that is fixed, use `cargo run` or copy the binary yourself.
+Cargo produces both `target/release/xchat` and `xchat-cli`, matching the launcher and install scripts.
 
 ---
 

@@ -76,7 +76,11 @@ if [ -z "$XCHAT_BIN" ]; then
             git clone https://github.com/EdgeRunner-runit/xChat_AP_2026.git "${SRC_DIR}/xChat_AP_2026"
         fi
         (cd "${SRC_DIR}/xChat_AP_2026" && cargo build --release)
-        cp "${SRC_DIR}/xChat_AP_2026/target/release/xchat" "${XCHAT_HOME}/bin/xchat"
+        if [ -f "${SRC_DIR}/xChat_AP_2026/target/release/xchat" ]; then
+            cp "${SRC_DIR}/xChat_AP_2026/target/release/xchat" "${XCHAT_HOME}/bin/xchat"
+        else
+            cp "${SRC_DIR}/xChat_AP_2026/target/release/xchat-cli" "${XCHAT_HOME}/bin/xchat"
+        fi
         chmod +x "${XCHAT_HOME}/bin/xchat"
         XCHAT_BIN="${XCHAT_HOME}/bin/xchat"
         echo "[✓] Android installation complete: ${XCHAT_BIN}"

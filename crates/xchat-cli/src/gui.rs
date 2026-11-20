@@ -84,7 +84,7 @@ pub struct AppState {
     pub burner_rooms: HashMap<String, xchat_core::burner::BurnerRoom>,
 }
 
-fn detect_local_ip() -> String {
+pub(crate) fn detect_local_ip() -> String {
     if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
         if socket.connect("8.8.8.8:80").is_ok() {
             if let Ok(addr) = socket.local_addr() {
@@ -459,11 +459,10 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                 if data["type"].as_str() == Some("handshake") {
                     let mut st = state_ble_inbound.lock().unwrap();
                     if let Some(c) = st.contacts.iter_mut().find(|c| {
-                        c.target.starts_with("ble:")
-                            || c.address == sender_addr
-                            || c.alias.to_lowercase().contains("cmf")
-                            || c.alias.to_lowercase().contains("nothing")
-                            || c.alias.to_lowercase().contains("phone")
+                        (!sender_addr.is_empty()
+                            && (c.address == sender_addr
+                                || c.target == format!("ble:{}", sender_addr)))
+                            || c.alias == formatted_alias
                     }) {
                         let prev_alias = c.alias.clone();
                         c.alias = formatted_alias.clone();
@@ -532,11 +531,9 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                     let found_idx = st.contacts.iter().position(|c| {
                         c.alias == formatted_alias
                             || c.alias == sender_alias
-                            || c.target.starts_with("ble:")
-                            || c.address == sender_addr
-                            || c.alias.to_lowercase().contains("cmf")
-                            || c.alias.to_lowercase().contains("nothing")
-                            || c.alias.to_lowercase().contains("phone")
+                            || (!sender_addr.is_empty()
+                                && (c.address == sender_addr
+                                    || c.target == format!("ble:{}", sender_addr)))
                     });
 
                     if let Some(idx) = found_idx {
@@ -790,12 +787,7 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                     "status": "online"
                 }))
                 .unwrap_or_else(|_| "{}".to_string());
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    json.len(),
-                    json
-                );
+                let resp = json_response("200 OK", &json, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/keygen" && method == "POST" {
                 let (new_addr, new_fp, new_visual, sign_pub, dh_pub, bundle_val) = {
@@ -839,12 +831,7 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                 }))
                 .unwrap_or_else(|_| "{}".to_string());
 
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    resp_body.len(),
-                    resp_body
-                );
+                let resp = json_response("200 OK", &resp_body, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if (path == "/api/bundle" || path == "/api/prekey") && method == "GET" {
                 let bundle_json = {
@@ -852,12 +839,7 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                     let bundle = st.keystore.export_bundle();
                     serde_json::to_string(&bundle).unwrap_or_else(|_| "{}".to_string())
                 };
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    bundle_json.len(),
-                    bundle_json
-                );
+                let resp = json_response("200 OK", &bundle_json, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/profile" && method == "GET" {
                 let (profile, reachable, invite_url, cur_vfp) = {
@@ -879,12 +861,7 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                     "invite_url": invite_url
                 }))
                 .unwrap_or_else(|_| "{}".to_string());
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    cors_headers,
-                    json.len(),
-                    json
-                );
+                let resp = json_response("200 OK", &json, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path == "/api/profile" && method == "POST" {
                 #[derive(Deserialize)]

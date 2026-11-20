@@ -31,7 +31,7 @@ use xchat_transport::{
 #[command(
     name = "xchat",
     about = "xChat: Decentralized Multi-Transport Private Messenger",
-    version = "1.0.0"
+    version = env!("CARGO_PKG_VERSION")
 )]
 struct Cli {
     #[command(subcommand)]
@@ -845,8 +845,9 @@ async fn main() -> anyhow::Result<()> {
             println!("Visual Safety Code: {}", visual_fp);
 
             if invite {
-                let local_socket = "127.0.0.1:8080";
-                let url = profile.generate_invite_url(local_socket);
+                let local_ip = crate::gui::detect_local_ip();
+                let local_socket = format!("{}:8080", local_ip);
+                let url = profile.generate_invite_url(&local_socket);
                 println!("-------------------------------------------------------");
                 println!("Shareable Invite URI: {}", url);
             }

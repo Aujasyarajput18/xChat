@@ -2150,8 +2150,8 @@ details.expander[open] {
             <span class="badge badge-experimental">Experimental</span>
           </summary>
           <div class="expander-content">
-            <div class="transport-detail-text">Turns your message into scrambled texts. Works without mobile data. Your phone company cannot read it.</div>
-            <button class="btn-action btn-ghost btn-sm" onclick="generateSmsFrameDemo()">Create text message</button>
+            <div class="transport-detail-text">Turns your message into scrambled texts. Works without mobile data. Your phone company cannot read it. (Illustration)</div>
+            <button class="btn-action btn-ghost btn-sm" onclick="generateSmsFrameDemo()">Show sample text message</button>
             <div id="smsFrameResult" class="code-block font-mono" style="display:none"></div>
           </div>
         </details>
@@ -2739,8 +2739,12 @@ const STRINGS = {
     statusOffline: "Offline",
     noneFound: "None found",
     nearbyCount: (n) => `${n} nearby`,
-    emptyChatNotice: (name) => `Chat with <strong>${escapeHtml(name)}</strong> is ready.<br>Send a message to begin.`,
-    securityNotice: (name) => `Only you and ${name} can read these messages.`,
+    emptyChatNotice: (name) => name === 'Personal notes'
+        ? `Save notes, links, or drafts here.<br>Only you can read them.`
+        : `Chat with <strong>${escapeHtml(name)}</strong> is ready.<br>Send a message to begin.`,
+    securityNotice: (name) => name === 'Personal notes'
+        ? `Only you can read these notes. They are saved privately on this device.`
+        : `Only you and ${name} can read these messages.`,
     toastSosSent: "Emergency alert sent",
     toastUnreachable: (name) => `Couldn't reach ${name}. Check you're on the same Wi-Fi, then try again.`,
     toastEnterAddress: "Enter a username or an address.",
@@ -4725,7 +4729,7 @@ async function enterBurnerRoom() {
 function generateSmsFrameDemo() {
     const hexDummy = Array.from(crypto.getRandomValues(new Uint8Array(32)))
         .map(b => b.toString(16).padStart(2, '0')).join('');
-    const frame = 'XCHAT:v1:' + myIdentity.address.substring(0, 8) + ':0/1:' + hexDummy;
+    const frame = '[Sample Demonstration Frame]\nXCHAT:v1:' + myIdentity.address.substring(0, 8) + ':0/1:' + hexDummy;
     const el = document.getElementById('smsFrameResult');
     if (el) {
         el.style.display = 'block';

@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "xchat"
+path = "src/main.rs"
+
 [dependencies]
 xchat-crypto.workspace = true
 xchat-core.workspace = true
