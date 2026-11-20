@@ -3999,8 +3999,7 @@ async function pollServerMessages() {
                 srvContacts.forEach(sc => {
                     const idx = contacts.findIndex(c => 
                         (sc.address && c.address && sc.address !== 'local' && c.address === sc.address) ||
-                        (c.alias.toLowerCase() === sc.alias.toLowerCase()) ||
-                        (sc.target && c.target && sc.target !== 'local' && c.target !== 'local' && sc.target === c.target)
+                        (c.alias.toLowerCase() === sc.alias.toLowerCase())
                     );
                     if (idx === -1) {
                         contacts.push(sc);

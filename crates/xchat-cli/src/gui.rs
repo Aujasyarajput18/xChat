@@ -1153,25 +1153,39 @@ pub async fn handle_http_connection<S>(
 
             let (target_opt, my_handle, my_addr, my_ip, my_port) = {
                 let mut st = state_clone.lock().unwrap();
-                let hist = st.messages.entry(req.alias.clone()).or_default();
-                hist.push(msg.clone());
+                // Record outgoing message under cryptographic address and alias (never by socket/target)
+                let contact_opt = st
+                    .contacts
+                    .iter()
+                    .find(|c| c.alias == req.alias || c.address == req.alias)
+                    .cloned();
 
-                // Cross-record outgoing message to linked address/target if known
-                let mut linked_aliases = Vec::new();
-                if let Some(c) = st.contacts.iter().find(|c| c.alias == req.alias) {
-                    if !c.address.is_empty() && c.address != req.alias {
-                        linked_aliases.push(c.address.clone());
+                if let Some(c) = contact_opt {
+                    if !c.address.is_empty() {
+                        st.messages
+                            .entry(c.address.clone())
+                            .or_default()
+                            .push(msg.clone());
                     }
-                    if !c.target.is_empty() && c.target != req.alias && c.target != "local" {
-                        linked_aliases.push(c.target.clone());
+                    if !c.alias.is_empty() && c.alias != c.address {
+                        st.messages
+                            .entry(c.alias.clone())
+                            .or_default()
+                            .push(msg.clone());
                     }
-                }
-                for link in linked_aliases {
-                    st.messages.entry(link).or_default().push(msg.clone());
+                } else {
+                    st.messages
+                        .entry(req.alias.clone())
+                        .or_default()
+                        .push(msg.clone());
                 }
 
                 let mut resolved_target = req.target.clone();
-                if let Some(c) = st.contacts.iter_mut().find(|c| c.alias == req.alias) {
+                if let Some(c) = st
+                    .contacts
+                    .iter_mut()
+                    .find(|c| c.alias == req.alias || c.address == req.alias)
+                {
                     c.last_message = req.text.clone();
                     c.last_time = now_str.clone();
                     if (resolved_target.is_none()
@@ -1462,7 +1476,7 @@ pub async fn handle_http_connection<S>(
         let _ = socket.write_all(resp.as_bytes()).await;
     } else if path == "/api/receive" && method == "POST" {
         let wire_opt = serde_json::from_str::<WireMessageEnvelope>(&body).ok();
-        let (envelope, sender_alias_opt, sender_socket_opt, sender_addr_hint) =
+        let (envelope, sender_alias_opt, _sender_socket_opt, sender_addr_hint) =
             if let Some(wire) = wire_opt {
                 (
                     wire.envelope,
@@ -1549,19 +1563,33 @@ pub async fn handle_http_connection<S>(
 
                     {
                         let mut st = state_clone.lock().unwrap();
+                        let effective_target = st
+                            .discovery
+                            .get_active_peers()
+                            .into_iter()
+                            .find(|p| p.address == sender_addr)
+                            .map(|p| p.socket_addr)
+                            .unwrap_or_default();
                         let emergency_alias =
                             format!("🚨 SOS: {}", &sender_addr[..8.min(sender_addr.len())]);
                         if let Some(c) = st.contacts.iter_mut().find(|c| c.address == sender_addr) {
                             c.last_message = alert_text.clone();
                             c.last_time = now_str.clone();
                             c.status = "🚨 EMERGENCY ACTIVE".to_string();
+                            if !effective_target.is_empty()
+                                && (c.target.is_empty()
+                                    || c.target == "local"
+                                    || c.target == "Direct")
+                            {
+                                c.target = effective_target.clone();
+                            }
                         } else {
                             st.contacts.insert(
                                 0,
                                 ContactEntry {
                                     alias: emergency_alias.clone(),
                                     address: sender_addr.clone(),
-                                    target: sender_socket_opt.unwrap_or_default(),
+                                    target: effective_target,
                                     status: "🚨 EMERGENCY ACTIVE".to_string(),
                                     last_message: alert_text.clone(),
                                     last_time: now_str.clone(),
@@ -1746,14 +1774,13 @@ pub async fn handle_http_connection<S>(
 
                 {
                     let mut st = state_clone.lock().unwrap();
-                    let effective_target = sender_socket_opt.clone().unwrap_or_else(|| {
-                        st.discovery
-                            .get_active_peers()
-                            .into_iter()
-                            .find(|p| p.address == sender_addr)
-                            .map(|p| p.socket_addr)
-                            .unwrap_or_default()
-                    });
+                    let effective_target = st
+                        .discovery
+                        .get_active_peers()
+                        .into_iter()
+                        .find(|p| p.address == sender_addr)
+                        .map(|p| p.socket_addr)
+                        .unwrap_or_default();
 
                     // Identify sender ONLY by the cryptographically derived address.
                     // sender_alias is only a display hint for brand-new contacts, and cannot collide with existing contacts.
@@ -1794,10 +1821,12 @@ pub async fn handle_http_connection<S>(
                     };
 
                     st.messages
-                        .entry(target_alias)
+                        .entry(sender_addr.clone())
                         .or_default()
                         .push(msg.clone());
-                    st.messages.entry(sender_addr).or_default().push(msg);
+                    if target_alias != sender_addr {
+                        st.messages.entry(target_alias).or_default().push(msg);
+                    }
 
                     let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
                         &st.session_store_path,
@@ -2004,109 +2033,46 @@ fn urlencoding_decode(s: &str) -> String {
 }
 
 fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> {
-    if peer == "Saved Messages" || peer == "xChat Assistant" {
+    if peer == "Saved Messages" || peer == "xChat Assistant" || peer.starts_with('#') {
         return st.messages.get(peer).cloned().unwrap_or_default();
     }
 
-    let mut candidate_keys: Vec<String> = Vec::new();
-    candidate_keys.push(peer.to_string());
-    let clean = peer.trim_start_matches('@');
-    candidate_keys.push(clean.to_string());
-    candidate_keys.push(format!("@{}", clean));
-    candidate_keys.push(peer.to_lowercase());
-    candidate_keys.push(format!("@{}", clean.to_lowercase()));
+    let clean_peer = peer.trim_start_matches('@');
 
-    // Find any contact matching peer
-    for c in &st.contacts {
-        let matches = c.alias.eq_ignore_ascii_case(peer)
-            || c.alias.eq_ignore_ascii_case(clean)
-            || c.address.eq_ignore_ascii_case(peer)
-            || c.target.eq_ignore_ascii_case(peer)
-            || c.target.contains(peer)
-            || peer.contains(&c.target)
-            || c.alias.to_lowercase().contains(&peer.to_lowercase())
-            || peer.to_lowercase().contains(&c.alias.to_lowercase());
-        if matches {
-            candidate_keys.push(c.alias.clone());
-            candidate_keys.push(c.address.clone());
-            candidate_keys.push(c.target.clone());
-            candidate_keys.push(
-                c.target
-                    .strip_prefix("ble:")
-                    .unwrap_or(&c.target)
-                    .to_string(),
-            );
+    // Key conversations strictly by cryptographic address.
+    // Resolve peer to exactly one contact by exact alias or address, then return messages[address].
+    // No substring matching and no merging by socket.
+    if let Some(c) = st.contacts.iter().find(|c| {
+        c.address == peer
+            || c.alias == peer
+            || c.alias.eq_ignore_ascii_case(peer)
+            || c.alias
+                .trim_start_matches('@')
+                .eq_ignore_ascii_case(clean_peer)
+    }) {
+        if !c.address.is_empty() {
+            if let Some(msgs) = st.messages.get(&c.address) {
+                return msgs.clone();
+            }
+        }
+        if let Some(msgs) = st.messages.get(&c.alias) {
+            return msgs.clone();
         }
     }
 
-    // Check discovered BLE devices
-    let ble_devs = st.ble_transport.get_discovered_devices();
-    for d in ble_devs {
-        let matches = d.id.eq_ignore_ascii_case(peer)
-            || d.address.eq_ignore_ascii_case(peer)
-            || d.name.eq_ignore_ascii_case(peer)
-            || d.name
-                .to_lowercase()
-                .replace(' ', "_")
-                .eq_ignore_ascii_case(clean)
-            || d.username.as_ref().is_some_and(|u| {
-                u.eq_ignore_ascii_case(peer)
-                    || u.trim_start_matches('@').eq_ignore_ascii_case(clean)
-            });
-        if matches {
-            candidate_keys.push(d.id.clone());
-            candidate_keys.push(d.address.clone());
-            candidate_keys.push(d.name.clone());
-            candidate_keys.push(format!("@{}", d.name.to_lowercase().replace(' ', "_")));
-            if let Some(ref u) = d.username {
-                candidate_keys.push(u.clone());
-                candidate_keys.push(u.trim_start_matches('@').to_string());
-            }
-        }
+    // Direct lookup in messages if peer is raw address or alias not yet in contacts
+    if let Some(msgs) = st.messages.get(peer) {
+        return msgs.clone();
+    }
+    if let Some(msgs) = st.messages.get(clean_peer) {
+        return msgs.clone();
+    }
+    let at_peer = format!("@{}", clean_peer);
+    if let Some(msgs) = st.messages.get(&at_peer) {
+        return msgs.clone();
     }
 
-    if peer == "Peer" {
-        for k in st.messages.keys() {
-            if k != "xChat Assistant" && k != "Saved Messages" {
-                candidate_keys.push(k.clone());
-            }
-        }
-    }
-
-    let mut collected: Vec<ChatMessage> = Vec::new();
-    let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for key in &candidate_keys {
-        if let Some(msgs) = st.messages.get(key) {
-            for m in msgs {
-                let dedup_key = format!("{}:{}:{}", m.id, m.time, m.text);
-                if seen_ids.insert(dedup_key) {
-                    collected.push(m.clone());
-                }
-            }
-        }
-    }
-
-    if collected.is_empty() {
-        // Last-resort fallback: check if any key in st.messages resembles peer
-        let peer_lower = peer.to_lowercase();
-        for (k, msgs) in &st.messages {
-            if k == "xChat Assistant" || k == "Saved Messages" {
-                continue;
-            }
-            let k_lower = k.to_lowercase();
-            if k_lower.contains(&peer_lower) || peer_lower.contains(&k_lower) {
-                for m in msgs {
-                    let dedup_key = format!("{}:{}:{}", m.id, m.time, m.text);
-                    if seen_ids.insert(dedup_key) {
-                        collected.push(m.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    collected
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -2181,20 +2147,19 @@ mod tests {
             st.csrf_token.clone()
         };
 
-        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
-        let port = listener_opt
-            .as_ref()
-            .and_then(|l| l.local_addr().ok())
-            .map(|a| a.port())
-            .unwrap_or(8080);
-        if let Some(listener) = listener_opt {
-            let state_srv = state.clone();
-            tokio::spawn(run_server_loop(
-                listener,
-                state_srv,
-                "127.0.0.1".to_string(),
-            ));
-        }
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
 
         // 1. Real HTTP GET /
         let req = format!(
@@ -2289,20 +2254,19 @@ mod tests {
         };
         let body = serde_json::to_string(&forged_wire).unwrap();
 
-        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
-        let port = listener_opt
-            .as_ref()
-            .and_then(|l| l.local_addr().ok())
-            .map(|a| a.port())
-            .unwrap_or(8080);
-        if let Some(listener) = listener_opt {
-            let state_srv = state.clone();
-            tokio::spawn(run_server_loop(
-                listener,
-                state_srv,
-                "127.0.0.1".to_string(),
-            ));
-        }
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
 
         let req = format!(
             "POST /api/receive HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -2317,19 +2281,91 @@ mod tests {
             resp_str
         );
 
-        let st = state.lock().unwrap();
-        let alice_msgs = st.messages.get("Alice");
-        assert!(
-            alice_msgs.is_none() || alice_msgs.unwrap().is_empty(),
-            "Message must NOT appear in Alice's chat despite forged sender_alias and socket!"
+        let (csrf_token, carol_alias) = {
+            let st = state.lock().unwrap();
+            let alice_msgs = st.messages.get("Alice");
+            assert!(
+                alice_msgs.is_none() || alice_msgs.unwrap().is_empty(),
+                "Message must NOT appear in Alice's chat despite forged sender_alias and socket!"
+            );
+
+            let carol_msgs = st
+                .messages
+                .get(&carol_addr)
+                .expect("Carol's message must exist under her cryptographic address");
+            assert_eq!(carol_msgs.len(), 1);
+            assert_eq!(carol_msgs[0].text, "I am really Carol");
+
+            let alice_contact = st
+                .contacts
+                .iter()
+                .find(|c| c.alias == "Alice")
+                .expect("Alice contact exists");
+            assert_eq!(
+                alice_contact.last_message, "",
+                "Alice's last_message preview must remain unchanged!"
+            );
+            assert_eq!(alice_contact.target, "192.168.1.100:8080");
+
+            let carol_contact = st
+                .contacts
+                .iter()
+                .find(|c| c.address == carol_addr)
+                .expect("Carol contact exists");
+            assert_ne!(
+                carol_contact.target, "192.168.1.100:8080",
+                "Carol's contact target must NOT be set to Alice's socket!"
+            );
+            assert_eq!(
+                carol_contact.target, "",
+                "Carol's target must be empty (not learned from unauthenticated wire header)"
+            );
+
+            (st.csrf_token.clone(), carol_contact.alias.clone())
+        };
+
+        // Query GET /api/messages?peer=Alice
+        let req_alice = format!(
+            "GET /api/messages?peer=Alice HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let resp_alice = send_test_http_request(port, state.clone(), &req_alice).await;
+        assert!(resp_alice.starts_with("HTTP/1.1 200 OK"));
+        let body_alice = resp_alice.split("\r\n\r\n").nth(1).unwrap_or("");
+        assert_eq!(
+            body_alice, "[]",
+            "Carol's message must NOT appear in GET /api/messages?peer=Alice!"
         );
 
-        let carol_msgs = st
-            .messages
-            .get(&carol_addr)
-            .expect("Carol's message must exist under her cryptographic address");
-        assert_eq!(carol_msgs.len(), 1);
-        assert_eq!(carol_msgs[0].text, "I am really Carol");
+        // Query GET /api/messages?peer={carol_addr}
+        let req_carol_addr = format!(
+            "GET /api/messages?peer={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            carol_addr, port, csrf_token
+        );
+        let resp_carol_addr = send_test_http_request(port, state.clone(), &req_carol_addr).await;
+        assert!(resp_carol_addr.starts_with("HTTP/1.1 200 OK"));
+        let body_carol_addr = resp_carol_addr.split("\r\n\r\n").nth(1).unwrap_or("");
+        assert!(
+            body_carol_addr.contains("I am really Carol"),
+            "Carol's message must appear in GET /api/messages?peer={}",
+            carol_addr
+        );
+
+        // Query GET /api/messages?peer={carol_alias}
+        let req_carol_alias = format!(
+            "GET /api/messages?peer={} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            carol_alias.replace(' ', "%20"),
+            port,
+            csrf_token
+        );
+        let resp_carol_alias = send_test_http_request(port, state.clone(), &req_carol_alias).await;
+        assert!(resp_carol_alias.starts_with("HTTP/1.1 200 OK"));
+        let body_carol_alias = resp_carol_alias.split("\r\n\r\n").nth(1).unwrap_or("");
+        assert!(
+            body_carol_alias.contains("I am really Carol"),
+            "Carol's message must appear in GET /api/messages?peer={}",
+            carol_alias
+        );
     }
 
     #[tokio::test]
@@ -2360,20 +2396,19 @@ mod tests {
         };
         let body = serde_json::to_string(&wire).unwrap();
 
-        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
-        let port = listener_opt
-            .as_ref()
-            .and_then(|l| l.local_addr().ok())
-            .map(|a| a.port())
-            .unwrap_or(8080);
-        if let Some(listener) = listener_opt {
-            let state_srv = state.clone();
-            tokio::spawn(run_server_loop(
-                listener,
-                state_srv,
-                "127.0.0.1".to_string(),
-            ));
-        }
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
 
         let req = format!(
             "POST /api/receive HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -2607,20 +2642,19 @@ mod tests {
     #[tokio::test]
     async fn test_p0_5_csrf_and_cors_protection() {
         let (state, _temp) = create_test_app_state().await;
-        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
-        let port = listener_opt
-            .as_ref()
-            .and_then(|l| l.local_addr().ok())
-            .map(|a| a.port())
-            .unwrap_or(8080);
-        if let Some(listener) = listener_opt {
-            let state_srv = state.clone();
-            tokio::spawn(run_server_loop(
-                listener,
-                state_srv,
-                "127.0.0.1".to_string(),
-            ));
-        }
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
 
         let csrf_token = state.lock().unwrap().csrf_token.clone();
 
@@ -2825,17 +2859,15 @@ mod tests {
     #[tokio::test]
     async fn test_p1_1_non_loopback_binding_config() {
         let (state, _temp) = create_test_app_state().await;
-        let listener_opt = TcpListener::bind("0.0.0.0:0").await.ok();
-        let port = listener_opt
-            .as_ref()
-            .and_then(|l| l.local_addr().ok())
-            .map(|a| a.port())
-            .unwrap_or(8080);
-
-        if let Some(listener) = listener_opt {
-            let state_srv = state.clone();
-            tokio::spawn(run_server_loop(listener, state_srv, "0.0.0.0".to_string()));
-        }
+        let listener = TcpListener::bind("0.0.0.0:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(listener, state_srv, "0.0.0.0".to_string()));
 
         // Test real HTTP request to 127.0.0.1 against the 0.0.0.0 listener
         let req = format!(
@@ -2933,20 +2965,19 @@ mod tests {
 
         // 2. Start server on ephemeral port and test real HTTP /api/ping
         let (state, _temp) = create_test_app_state().await;
-        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
-        let port = listener_opt
-            .as_ref()
-            .and_then(|l| l.local_addr().ok())
-            .map(|a| a.port())
-            .unwrap_or(8080);
-        if let Some(listener) = listener_opt {
-            let state_srv = state.clone();
-            tokio::spawn(run_server_loop(
-                listener,
-                state_srv,
-                "127.0.0.1".to_string(),
-            ));
-        }
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
 
         let csrf_token = state.lock().unwrap().csrf_token.clone();
 
@@ -3004,20 +3035,19 @@ mod tests {
     #[tokio::test]
     async fn test_burner_room_http_join_and_inbound_delivery() {
         let (state, _temp) = create_test_app_state().await;
-        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
-        let port = listener_opt
-            .as_ref()
-            .and_then(|l| l.local_addr().ok())
-            .map(|a| a.port())
-            .unwrap_or(8080);
-        if let Some(listener) = listener_opt {
-            let state_srv = state.clone();
-            tokio::spawn(run_server_loop(
-                listener,
-                state_srv,
-                "127.0.0.1".to_string(),
-            ));
-        }
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
 
         let csrf_token = {
             let st = state.lock().unwrap();
