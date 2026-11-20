@@ -3,6 +3,7 @@
 mod gui;
 
 use clap::{Parser, Subcommand};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::AsyncBufReadExt;
@@ -158,6 +159,16 @@ enum Commands {
         /// Message text to encrypt and send
         #[arg(short, long)]
         message: String,
+    },
+
+    /// Fetch and decrypt buffered messages from a store-and-forward blind relay
+    Fetch {
+        /// Blind relay address (e.g. 127.0.0.1:7000 or 192.168.1.15:7000)
+        #[arg(short, long)]
+        relay: String,
+        /// Optional destination route token hex (if fetching with a custom token)
+        #[arg(short, long)]
+        token: Option<String>,
     },
 
     /// Test live end-to-end communication between two separate machines/nodes over real network sockets
@@ -699,6 +710,46 @@ async fn main() -> anyhow::Result<()> {
             let tcp = TcpTransport::bind("127.0.0.1:0").await?;
             tcp.send_envelope(&target, &envelope).await?;
             println!("[✓] Message transmitted successfully across network socket!");
+        }
+
+        Commands::Fetch { relay, token } => {
+            println!("=======================================================");
+            println!("   xChat Store-and-Forward Relay Fetch");
+            println!("=======================================================");
+            println!("Connecting to Blind Relay at {}...", relay);
+
+            let keystore_path = crate::gui::get_keystore_path();
+            let mut keystore =
+                KeyStore::load_or_generate(&keystore_path).unwrap_or_else(|_| KeyStore::generate());
+            let session_path = keystore_path.with_file_name(".xchat_sessions.bin");
+            let storage_key = KeyStore::get_or_create_device_storage_key()
+                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+            let mut sessions =
+                xchat_core::session::load_sessions_encrypted(&session_path, &storage_key)
+                    .unwrap_or_default();
+
+            let (fetched, decrypted, messages) =
+                execute_fetch_envelopes(&relay, token.as_deref(), &mut keystore, &mut sessions)
+                    .await?;
+
+            for m in &messages {
+                println!("[Relay] 📩 Received and decrypted message: \"{}\"", m);
+            }
+
+            if fetched > 0 {
+                let _ = keystore.save_to_path(&keystore_path);
+                let _ = xchat_core::session::save_sessions_encrypted(
+                    &sessions,
+                    &session_path,
+                    &storage_key,
+                );
+            }
+
+            println!("-------------------------------------------------------");
+            println!(
+                "Fetch complete. Total envelopes fetched: {}, decrypted: {}",
+                fetched, decrypted
+            );
         }
 
         Commands::TestTwoNodes { port1, port2 } => {
@@ -1323,4 +1374,194 @@ async fn run_two_nodes_live_test(port1: u16, port2: u16) -> anyhow::Result<()> {
     println!("===============================================================================");
 
     Ok(())
+}
+
+pub async fn execute_fetch_envelopes(
+    relay: &str,
+    token_opt: Option<&str>,
+    keystore: &mut KeyStore,
+    sessions: &mut HashMap<String, Session>,
+) -> anyhow::Result<(usize, usize, Vec<String>)> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs();
+
+    let tokens_to_check: Vec<[u8; 16]> = if let Some(t_hex) = token_opt {
+        let bytes = hex::decode(t_hex).map_err(|e| anyhow::anyhow!("Invalid token hex: {}", e))?;
+        if bytes.len() != 16 {
+            return Err(anyhow::anyhow!(
+                "Token must be 16 bytes (32 hex characters)"
+            ));
+        }
+        let mut arr = [0u8; 16];
+        arr.copy_from_slice(&bytes);
+        vec![arr]
+    } else {
+        let cur_epoch = now / 3600;
+        let my_pub = keystore.identity.public_key();
+        vec![
+            my_pub.ephemeral_discovery_token(cur_epoch),
+            my_pub.ephemeral_discovery_token(cur_epoch.saturating_sub(1)),
+            my_pub.ephemeral_discovery_token(cur_epoch.saturating_sub(2)),
+            [0u8; 16],
+        ]
+    };
+
+    let mut total_fetched = 0;
+    let mut total_decrypted = 0;
+    let mut decrypted_messages = Vec::new();
+
+    for t in &tokens_to_check {
+        if let Ok(envelopes) = TcpTransport::fetch_relay_envelopes(relay, t).await {
+            for env in envelopes {
+                total_fetched += 1;
+                if env.x3dh_init.is_some() {
+                    match Session::respond_inbound(keystore, &env, now) {
+                        Ok((session, pt)) => {
+                            let sender_addr = session.peer_identity.address();
+                            let msg = String::from_utf8_lossy(&pt).to_string();
+                            decrypted_messages.push(msg);
+                            sessions.insert(sender_addr, session);
+                            total_decrypted += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("[Relay] Inbound handshake failed: {}", e);
+                        }
+                    }
+                } else {
+                    let mut decrypted = false;
+                    for session in sessions.values_mut() {
+                        let res: Result<Vec<u8>, _> = session.decrypt_message(&env, now);
+                        if let Ok(pt_vec) = res {
+                            let msg = String::from_utf8_lossy(&pt_vec).to_string();
+                            decrypted_messages.push(msg);
+                            decrypted = true;
+                            total_decrypted += 1;
+                            break;
+                        }
+                    }
+                    if !decrypted {
+                        eprintln!("[Relay] Envelope arrived but could not be decrypted");
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((total_fetched, total_decrypted, decrypted_messages))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_fetch_relay_retrieves_offline_messages() {
+        let listener_opt = tokio::net::TcpListener::bind("127.0.0.1:0").await.ok();
+        if listener_opt.is_none() {
+            // Socket bind not permitted in sandboxed environment; covered by unit test in xchat_transport
+            return;
+        }
+        let listener = listener_opt.unwrap();
+        let relay_addr = listener.local_addr().unwrap().to_string();
+
+        // Check if TCP connection is permitted in this environment
+        if tokio::net::TcpStream::connect(&relay_addr).await.is_err() {
+            return;
+        }
+
+        let relay_node = std::sync::Arc::new(tokio::sync::Mutex::new(RelayNode::new()));
+        let relay_ref_srv = relay_node.clone();
+
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let relay_ref = relay_ref_srv.clone();
+                tokio::spawn(async move {
+                    let mut len_buf = [0u8; 4];
+                    if socket.read_exact(&mut len_buf).await.is_err() {
+                        return;
+                    }
+                    let flen = u32::from_be_bytes(len_buf) as usize;
+                    if flen == 16 {
+                        let mut token = [0u8; 16];
+                        if socket.read_exact(&mut token).await.is_err() {
+                            return;
+                        }
+                        let envs = {
+                            let mut rn = relay_ref.lock().await;
+                            rn.fetch_for_token(&token)
+                        };
+                        let count_bytes = (envs.len() as u32).to_be_bytes();
+                        if socket.write_all(&count_bytes).await.is_err() {
+                            return;
+                        }
+                        for env in envs {
+                            if let Ok(bytes) = env.to_bytes() {
+                                let env_len = (bytes.len() as u32).to_be_bytes();
+                                let _ = socket.write_all(&env_len).await;
+                                let _ = socket.write_all(&bytes).await;
+                            }
+                        }
+                        let _ = socket.flush().await;
+                    } else if flen > 0 && flen <= xchat_transport::MAX_ENVELOPE_FRAME_SIZE {
+                        let mut body = vec![0u8; flen];
+                        if socket.read_exact(&mut body).await.is_ok() {
+                            if let Ok(env) = EncryptedEnvelope::from_bytes(&body) {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                let mut rn = relay_ref.lock().await;
+                                let _ = rn.forward_envelope(env, now);
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        // Alice prepares a message for offline Bob and routes it to the relay
+        let alice_ks = KeyStore::generate();
+        let mut bob_ks = KeyStore::generate();
+        let bob_bundle = bob_ks.export_bundle();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let bob_route_token = bob_ks
+            .identity
+            .public_key()
+            .ephemeral_discovery_token(now / 3600);
+
+        let (_alice_session, env) = Session::initiate_outbound(
+            &alice_ks,
+            &bob_bundle,
+            b"Top secret intel stored while Bob was offline",
+            bob_route_token,
+            now,
+            86400,
+        )
+        .unwrap();
+
+        // Alice transmits to relay over TCP
+        let tcp = match TcpTransport::bind("127.0.0.1:0").await {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        tcp.send_envelope(&relay_addr, &env).await.unwrap();
+
+        // Bob is now back online and executes fetch against relay
+        let mut bob_sessions = HashMap::new();
+        let (fetched, decrypted, messages) =
+            execute_fetch_envelopes(&relay_addr, None, &mut bob_ks, &mut bob_sessions)
+                .await
+                .unwrap();
+
+        assert_eq!(fetched, 1);
+        assert_eq!(decrypted, 1);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0], "Top secret intel stored while Bob was offline");
+    }
 }
