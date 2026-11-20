@@ -21,6 +21,7 @@ rand.workspace = true
 uuid.workspace = true
 btleplug = "0.13.5"
 socket2 = "0.6"
+ed25519-dalek.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

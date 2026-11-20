@@ -141,6 +141,56 @@ impl TcpTransport {
         }
         Ok(envelopes)
     }
+
+    /// Fetch buffered envelopes from a blind relay server with cryptographic ownership authentication.
+    pub async fn fetch_relay_envelopes_authenticated(
+        relay_addr: &str,
+        token: Option<&xchat_core::envelope::RouteToken>,
+        identity: &xchat_crypto::identity::IdentityKeyPair,
+    ) -> Result<Vec<EncryptedEnvelope>, TransportError> {
+        let mut stream = TcpStream::connect(relay_addr).await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let req_token = token.copied().unwrap_or([0u8; 16]);
+        let pubkey = identity.public_key().sign_pubkey;
+        let ts_bytes = now.to_be_bytes();
+
+        let mut to_sign = Vec::with_capacity(32);
+        to_sign.extend_from_slice(b"xchat-fetch-v1:");
+        to_sign.extend_from_slice(&req_token);
+        to_sign.extend_from_slice(&ts_bytes);
+
+        let sig_bytes = identity.sign(&to_sign);
+
+        // Frame length = 120 (16 token + 32 pubkey + 8 ts + 64 sig)
+        let frame_len = (120u32).to_be_bytes();
+        stream.write_all(&frame_len).await?;
+        stream.write_all(&req_token).await?;
+        stream.write_all(&pubkey).await?;
+        stream.write_all(&ts_bytes).await?;
+        stream.write_all(&sig_bytes).await?;
+        stream.flush().await?;
+
+        let mut count_buf = [0u8; 4];
+        stream.read_exact(&mut count_buf).await?;
+        let count = u32::from_be_bytes(count_buf) as usize;
+
+        let mut envelopes = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut flen_buf = [0u8; 4];
+            stream.read_exact(&mut flen_buf).await?;
+            let flen = u32::from_be_bytes(flen_buf) as usize;
+            let mut body = vec![0u8; flen];
+            stream.read_exact(&mut body).await?;
+            let env = EncryptedEnvelope::from_bytes(&body)
+                .map_err(|e| TransportError::Serialization(e.to_string()))?;
+            envelopes.push(env);
+        }
+        Ok(envelopes)
+    }
 }
 
 #[async_trait]

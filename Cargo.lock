@@ -1756,6 +1756,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "ed25519-dalek",
  "hex",
  "rand",
  "serde",
@@ -1826,6 +1827,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "btleplug",
+ "ed25519-dalek",
  "futures",
  "hex",
  "rand",

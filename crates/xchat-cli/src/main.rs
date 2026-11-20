@@ -536,16 +536,59 @@ async fn main() -> anyhow::Result<()> {
                             return;
                         }
                         let flen = u32::from_be_bytes(len_buf) as usize;
-                        if flen == 16 {
-                            // RouteToken fetch request
-                            let mut token = [0u8; 16];
-                            if socket.read_exact(&mut token).await.is_err() {
+                        if flen == 120 {
+                            // Authenticated RouteToken fetch request
+                            let mut req_bytes = [0u8; 120];
+                            if socket.read_exact(&mut req_bytes).await.is_err() {
                                 return;
                             }
-                            let envs = {
+                            let mut token = [0u8; 16];
+                            token.copy_from_slice(&req_bytes[0..16]);
+                            let mut pubkey = [0u8; 32];
+                            pubkey.copy_from_slice(&req_bytes[16..48]);
+                            let mut ts_bytes = [0u8; 8];
+                            ts_bytes.copy_from_slice(&req_bytes[48..56]);
+                            let timestamp = u64::from_be_bytes(ts_bytes);
+                            let mut sig_bytes = [0u8; 64];
+                            sig_bytes.copy_from_slice(&req_bytes[56..120]);
+
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs();
+
+                            let mut authorized = false;
+                            if now.abs_diff(timestamp) <= 300 {
+                                if let Ok(verifying_key) =
+                                    ed25519_dalek::VerifyingKey::from_bytes(&pubkey)
+                                {
+                                    let mut to_verify = Vec::with_capacity(32);
+                                    to_verify.extend_from_slice(b"xchat-fetch-v1:");
+                                    to_verify.extend_from_slice(&token);
+                                    to_verify.extend_from_slice(&ts_bytes);
+                                    if let Ok(sig) =
+                                        ed25519_dalek::Signature::from_slice(&sig_bytes)
+                                    {
+                                        use ed25519_dalek::Verifier;
+                                        if verifying_key.verify(&to_verify, &sig).is_ok() {
+                                            authorized = true;
+                                        }
+                                    }
+                                }
+                            }
+
+                            let envs = if authorized {
                                 let mut rn = relay_ref.lock().await;
-                                rn.fetch_for_token(&token)
+                                if token == [0u8; 16] {
+                                    rn.fetch_all_for_pubkey(&pubkey, now)
+                                } else {
+                                    rn.fetch_for_token_authenticated(&token, &pubkey, now)
+                                        .unwrap_or_default()
+                                }
+                            } else {
+                                Vec::new()
                             };
+
                             let count_bytes = (envs.len() as u32).to_be_bytes();
                             if socket.write_all(&count_bytes).await.is_err() {
                                 return;
@@ -557,6 +600,12 @@ async fn main() -> anyhow::Result<()> {
                                     let _ = socket.write_all(&bytes).await;
                                 }
                             }
+                            let _ = socket.flush().await;
+                        } else if flen == 16 {
+                            // Unauthenticated fetch request is forbidden to prevent mailbox draining
+                            let mut dummy = [0u8; 16];
+                            let _ = socket.read_exact(&mut dummy).await;
+                            let _ = socket.write_all(&0u32.to_be_bytes()).await;
                             let _ = socket.flush().await;
                         } else if flen > 0 && flen <= xchat_transport::MAX_ENVELOPE_FRAME_SIZE {
                             let mut body = vec![0u8; flen];
@@ -640,7 +689,7 @@ async fn main() -> anyhow::Result<()> {
 
             let route_token = recipient_bundle
                 .identity_key
-                .ephemeral_discovery_token(now / 3600);
+                .ephemeral_discovery_token(now / 60);
 
             let recipient_addr = recipient_bundle.identity_key.address();
             let session_path = keystore_path.with_file_name(".xchat_sessions.bin");
@@ -1384,7 +1433,7 @@ pub async fn execute_fetch_envelopes(
         .duration_since(std::time::UNIX_EPOCH)?
         .as_secs();
 
-    let tokens_to_check: Vec<[u8; 16]> = if let Some(t_hex) = token_opt {
+    let custom_token = if let Some(t_hex) = token_opt {
         let bytes = hex::decode(t_hex).map_err(|e| anyhow::anyhow!("Invalid token hex: {}", e))?;
         if bytes.len() != 16 {
             return Err(anyhow::anyhow!(
@@ -1393,55 +1442,51 @@ pub async fn execute_fetch_envelopes(
         }
         let mut arr = [0u8; 16];
         arr.copy_from_slice(&bytes);
-        vec![arr]
+        Some(arr)
     } else {
-        let cur_epoch = now / 3600;
-        let my_pub = keystore.identity.public_key();
-        vec![
-            my_pub.ephemeral_discovery_token(cur_epoch),
-            my_pub.ephemeral_discovery_token(cur_epoch.saturating_sub(1)),
-            my_pub.ephemeral_discovery_token(cur_epoch.saturating_sub(2)),
-            [0u8; 16],
-        ]
+        None
     };
+
+    let envelopes = TcpTransport::fetch_relay_envelopes_authenticated(
+        relay,
+        custom_token.as_ref(),
+        &keystore.identity,
+    )
+    .await?;
 
     let mut total_fetched = 0;
     let mut total_decrypted = 0;
     let mut decrypted_messages = Vec::new();
 
-    for t in &tokens_to_check {
-        if let Ok(envelopes) = TcpTransport::fetch_relay_envelopes(relay, t).await {
-            for env in envelopes {
-                total_fetched += 1;
-                if env.x3dh_init.is_some() {
-                    match Session::respond_inbound(keystore, &env, now) {
-                        Ok((session, pt)) => {
-                            let sender_addr = session.peer_identity.address();
-                            let msg = String::from_utf8_lossy(&pt).to_string();
-                            decrypted_messages.push(msg);
-                            sessions.insert(sender_addr, session);
-                            total_decrypted += 1;
-                        }
-                        Err(e) => {
-                            eprintln!("[Relay] Inbound handshake failed: {}", e);
-                        }
-                    }
-                } else {
-                    let mut decrypted = false;
-                    for session in sessions.values_mut() {
-                        let res: Result<Vec<u8>, _> = session.decrypt_message(&env, now);
-                        if let Ok(pt_vec) = res {
-                            let msg = String::from_utf8_lossy(&pt_vec).to_string();
-                            decrypted_messages.push(msg);
-                            decrypted = true;
-                            total_decrypted += 1;
-                            break;
-                        }
-                    }
-                    if !decrypted {
-                        eprintln!("[Relay] Envelope arrived but could not be decrypted");
-                    }
+    for env in envelopes {
+        total_fetched += 1;
+        if env.x3dh_init.is_some() {
+            match Session::respond_inbound(keystore, &env, now) {
+                Ok((session, pt)) => {
+                    let sender_addr = session.peer_identity.address();
+                    let msg = String::from_utf8_lossy(&pt).to_string();
+                    decrypted_messages.push(msg);
+                    sessions.insert(sender_addr, session);
+                    total_decrypted += 1;
                 }
+                Err(e) => {
+                    eprintln!("[Relay] Inbound handshake failed: {}", e);
+                }
+            }
+        } else {
+            let mut decrypted = false;
+            for session in sessions.values_mut() {
+                let res: Result<Vec<u8>, _> = session.decrypt_message(&env, now);
+                if let Ok(pt_vec) = res {
+                    let msg = String::from_utf8_lossy(&pt_vec).to_string();
+                    decrypted_messages.push(msg);
+                    decrypted = true;
+                    total_decrypted += 1;
+                    break;
+                }
+            }
+            if !decrypted {
+                eprintln!("[Relay] Envelope arrived but could not be decrypted");
             }
         }
     }
@@ -1514,18 +1559,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_relay_retrieves_offline_messages() {
-        let listener_opt = tokio::net::TcpListener::bind("127.0.0.1:0").await.ok();
-        if listener_opt.is_none() {
-            // Socket bind not permitted in sandboxed environment; covered by unit test in xchat_transport
-            return;
-        }
-        let listener = listener_opt.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
         let relay_addr = listener.local_addr().unwrap().to_string();
-
-        // Check if TCP connection is permitted in this environment
-        if tokio::net::TcpStream::connect(&relay_addr).await.is_err() {
-            return;
-        }
 
         let relay_node = std::sync::Arc::new(tokio::sync::Mutex::new(RelayNode::new()));
         let relay_ref_srv = relay_node.clone();
@@ -1540,15 +1577,56 @@ mod tests {
                         return;
                     }
                     let flen = u32::from_be_bytes(len_buf) as usize;
-                    if flen == 16 {
-                        let mut token = [0u8; 16];
-                        if socket.read_exact(&mut token).await.is_err() {
+                    if flen == 120 {
+                        let mut req_bytes = [0u8; 120];
+                        if socket.read_exact(&mut req_bytes).await.is_err() {
                             return;
                         }
-                        let envs = {
+                        let mut token = [0u8; 16];
+                        token.copy_from_slice(&req_bytes[0..16]);
+                        let mut pubkey = [0u8; 32];
+                        pubkey.copy_from_slice(&req_bytes[16..48]);
+                        let mut ts_bytes = [0u8; 8];
+                        ts_bytes.copy_from_slice(&req_bytes[48..56]);
+                        let timestamp = u64::from_be_bytes(ts_bytes);
+                        let mut sig_bytes = [0u8; 64];
+                        sig_bytes.copy_from_slice(&req_bytes[56..120]);
+
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs();
+
+                        let mut authorized = false;
+                        if now.abs_diff(timestamp) <= 300 {
+                            if let Ok(verifying_key) =
+                                ed25519_dalek::VerifyingKey::from_bytes(&pubkey)
+                            {
+                                let mut to_verify = Vec::with_capacity(32);
+                                to_verify.extend_from_slice(b"xchat-fetch-v1:");
+                                to_verify.extend_from_slice(&token);
+                                to_verify.extend_from_slice(&ts_bytes);
+                                if let Ok(sig) = ed25519_dalek::Signature::from_slice(&sig_bytes) {
+                                    use ed25519_dalek::Verifier;
+                                    if verifying_key.verify(&to_verify, &sig).is_ok() {
+                                        authorized = true;
+                                    }
+                                }
+                            }
+                        }
+
+                        let envs = if authorized {
                             let mut rn = relay_ref.lock().await;
-                            rn.fetch_for_token(&token)
+                            if token == [0u8; 16] {
+                                rn.fetch_all_for_pubkey(&pubkey, now)
+                            } else {
+                                rn.fetch_for_token_authenticated(&token, &pubkey, now)
+                                    .unwrap_or_default()
+                            }
+                        } else {
+                            Vec::new()
                         };
+
                         let count_bytes = (envs.len() as u32).to_be_bytes();
                         if socket.write_all(&count_bytes).await.is_err() {
                             return;
@@ -1560,6 +1638,12 @@ mod tests {
                                 let _ = socket.write_all(&bytes).await;
                             }
                         }
+                        let _ = socket.flush().await;
+                    } else if flen == 16 {
+                        // Reject unauthenticated fetch requests
+                        let mut dummy = [0u8; 16];
+                        let _ = socket.read_exact(&mut dummy).await;
+                        let _ = socket.write_all(&0u32.to_be_bytes()).await;
                         let _ = socket.flush().await;
                     } else if flen > 0 && flen <= xchat_transport::MAX_ENVELOPE_FRAME_SIZE {
                         let mut body = vec![0u8; flen];
@@ -1590,7 +1674,7 @@ mod tests {
         let bob_route_token = bob_ks
             .identity
             .public_key()
-            .ephemeral_discovery_token(now / 3600);
+            .ephemeral_discovery_token(now / 60);
 
         let (_alice_session, env) = Session::initiate_outbound(
             &alice_ks,
@@ -1603,13 +1687,30 @@ mod tests {
         .unwrap();
 
         // Alice transmits to relay over TCP
-        let tcp = match TcpTransport::bind("127.0.0.1:0").await {
-            Ok(t) => t,
-            Err(_) => return,
-        };
+        let tcp = TcpTransport::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind tcp transport");
         tcp.send_envelope(&relay_addr, &env).await.unwrap();
 
-        // Bob is now back online and executes fetch against relay
+        // 1. Mallory (a different identity) tries to drain Bob's mailbox by token
+        let mut mallory_ks = KeyStore::generate();
+        let mut mallory_sessions = HashMap::new();
+        let (mal_fetched, mal_decrypted, mal_msgs) = execute_fetch_envelopes(
+            &relay_addr,
+            Some(&hex::encode(bob_route_token)),
+            &mut mallory_ks,
+            &mut mallory_sessions,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            mal_fetched, 0,
+            "Mallory must NOT be able to fetch or drain Bob's relay envelopes!"
+        );
+        assert_eq!(mal_decrypted, 0);
+        assert!(mal_msgs.is_empty());
+
+        // 2. Bob connects with authentic identity and executes fetch against relay
         let mut bob_sessions = HashMap::new();
         let (fetched, decrypted, messages) =
             execute_fetch_envelopes(&relay_addr, None, &mut bob_ks, &mut bob_sessions)
@@ -1620,6 +1721,13 @@ mod tests {
         assert_eq!(decrypted, 1);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0], "Top secret intel stored while Bob was offline");
+
+        // 3. Relay storage is now drained for Bob
+        let (drained_fetched, _, _) =
+            execute_fetch_envelopes(&relay_addr, None, &mut bob_ks, &mut bob_sessions)
+                .await
+                .unwrap();
+        assert_eq!(drained_fetched, 0);
     }
 
     #[tokio::test]
