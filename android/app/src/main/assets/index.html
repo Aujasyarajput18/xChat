@@ -2739,10 +2739,10 @@ const STRINGS = {
     statusOffline: "Offline",
     noneFound: "None found",
     nearbyCount: (n) => `${n} nearby`,
-    emptyChatNotice: (name) => name === 'Personal notes'
+    emptyChatNotice: (name) => (name === 'Saved Messages' || name === 'Personal notes')
         ? `Save notes, links, or drafts here.<br>Only you can read them.`
         : `Chat with <strong>${escapeHtml(name)}</strong> is ready.<br>Send a message to begin.`,
-    securityNotice: (name) => name === 'Personal notes'
+    securityNotice: (name) => (name === 'Saved Messages' || name === 'Personal notes')
         ? `Only you can read these notes. They are saved privately on this device.`
         : `Only you and ${name} can read these messages.`,
     toastSosSent: "Emergency alert sent",
@@ -3536,7 +3536,11 @@ function connectToDiscoveredPeer(peer) {
     const sock = isBle ? (peer.address || peer.ip) : (peer.socket_addr || (peer.ip ? `${peer.ip}:${peer.port || 8080}` : (peer.address || '127.0.0.1:8080')));
     const statusLabel = isBle ? 'Physical BLE Mesh' : 'Nearby Wi-Fi Mesh';
 
-    let contact = contacts.find(c => c.alias === u || c.target === sock);
+    let contact = contacts.find(c => 
+        (peer.address && c.address && c.address === peer.address) ||
+        (sock && c.target && sock !== 'local' && c.target === sock) ||
+        (c.alias.toLowerCase() === u.toLowerCase())
+    );
     if (!contact) {
         contact = {
             alias: u,
@@ -3551,6 +3555,12 @@ function connectToDiscoveredPeer(peer) {
     } else {
         contact.target = sock;
         contact.status = statusLabel;
+        if (peer.address && !contact.address) {
+            contact.address = peer.address;
+        }
+        if (peer.fingerprint && !contact.fingerprint) {
+            contact.fingerprint = peer.fingerprint;
+        }
     }
     Storage.set('contacts', JSON.stringify(contacts));
     if (!isNative) {
@@ -3562,7 +3572,7 @@ function connectToDiscoveredPeer(peer) {
     }
     renderContacts();
     selectContact(contact);
-    showToast(STRINGS.toastConnectedTo(u));
+    showToast(STRINGS.toastConnectedTo(contact.alias));
 }
 
 // Contacts & Chats
@@ -3584,7 +3594,7 @@ function renderContacts(filtered) {
         let statusText = c.status || 'LAN';
 
         if (c.alias === 'Saved Messages') {
-            displayName = 'Personal notes';
+            displayName = 'Saved Messages';
             if (snippet === 'Personal cloud notes & encryption test') snippet = 'Notes to yourself';
             if (statusText === 'Encrypted Storage') statusText = 'Private';
         } else if (c.alias === 'xChat Assistant') {
@@ -3652,7 +3662,7 @@ function selectContact(c) {
     if (activeView) activeView.style.display = 'flex';
 
     let displayName = c.alias;
-    if (c.alias === 'Saved Messages') displayName = 'Personal notes';
+    if (c.alias === 'Saved Messages') displayName = 'Saved Messages';
     else if (c.alias === 'xChat Assistant') displayName = 'AI helper';
 
     const avatarBox = document.getElementById('activePeerAvatar');
@@ -3744,7 +3754,7 @@ function renderMessages() {
     const history = chatHistories[activeContact.alias] || [];
     if (history.length === 0) {
         let displayName = activeContact.alias;
-        if (activeContact.alias === 'Saved Messages') displayName = 'Personal notes';
+        if (activeContact.alias === 'Saved Messages') displayName = 'Saved Messages';
         else if (activeContact.alias === 'xChat Assistant') displayName = 'AI helper';
         const notice = document.createElement('div');
         notice.className = 'empty-chat-notice';
@@ -3854,7 +3864,7 @@ async function sendCurrentMessage() {
                     Storage.set('chat_histories', JSON.stringify(chatHistories));
                     renderMessages();
                 }
-                showToast(STRINGS.toastUnreachable(activeContact.alias === 'Saved Messages' ? 'Personal notes' : activeContact.alias), true);
+                showToast(STRINGS.toastUnreachable(activeContact.alias), true);
             }
         } catch(e) {
             const hist = chatHistories[activeContact.alias];
@@ -3863,7 +3873,7 @@ async function sendCurrentMessage() {
                 Storage.set('chat_histories', JSON.stringify(chatHistories));
                 renderMessages();
             }
-            showToast(STRINGS.toastUnreachable(activeContact.alias === 'Saved Messages' ? 'Personal notes' : activeContact.alias), true);
+            showToast(STRINGS.toastUnreachable(activeContact.alias), true);
         }
     }
 }
@@ -3972,7 +3982,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
         SoundFX.playReceive();
         renderContacts();
 
-        if (!activeContact || activeContact.alias === 'Saved Messages' || activeContact.alias === contact.alias || activeContact.alias === formattedAlias || (activeContact.target && activeContact.target.startsWith('ble:'))) {
+        if (!activeContact || activeContact.alias === contact.alias || activeContact.alias === formattedAlias || (activeContact.target && activeContact.target.startsWith('ble:'))) {
             activeContact = contact;
             renderMessages();
         }
@@ -3988,13 +3998,9 @@ async function pollServerMessages() {
                 let contactsChanged = false;
                 srvContacts.forEach(sc => {
                     const idx = contacts.findIndex(c => 
-                        c.alias.toLowerCase() === sc.alias.toLowerCase() || 
-                        (c.address && sc.address && c.address === sc.address) ||
-                        (c.target && sc.target && c.target === sc.target) ||
-                        (c.alias.toLowerCase().includes('cmf') && sc.alias.toLowerCase().includes('user')) ||
-                        (sc.alias.toLowerCase().includes('cmf') && c.alias.toLowerCase().includes('user')) ||
-                        (c.alias.toLowerCase().includes('nothing') && sc.alias.toLowerCase().includes('user')) ||
-                        (sc.alias.toLowerCase().includes('nothing') && c.alias.toLowerCase().includes('user'))
+                        (sc.address && c.address && sc.address !== 'local' && c.address === sc.address) ||
+                        (c.alias.toLowerCase() === sc.alias.toLowerCase()) ||
+                        (sc.target && c.target && sc.target !== 'local' && c.target !== 'local' && sc.target === c.target)
                     );
                     if (idx === -1) {
                         contacts.push(sc);
@@ -4003,22 +4009,21 @@ async function pollServerMessages() {
                             window['_alerted_' + sc.address] = true;
                             showToast('🚨 EMERGENCY ALERT from ' + sc.alias + ': ' + sc.last_message);
                         }
-                        if (!activeContact || activeContact.alias === 'Saved Messages') {
+                        if (!activeContact) {
                             activeContact = sc;
                         }
                     } else {
-                        const oldAlias = contacts[idx].alias;
                         if (sc.status && sc.status.includes('EMERGENCY ACTIVE') && !window['_alerted_' + sc.address]) {
                             window['_alerted_' + sc.address] = true;
                             showToast('🚨 EMERGENCY ALERT from ' + sc.alias + ': ' + sc.last_message);
                         }
-                        if (oldAlias !== sc.alias) {
-                            contacts[idx].alias = sc.alias;
-                            if (activeContact && (activeContact.alias === oldAlias || activeContact.address === sc.address)) {
-                                activeContact = contacts[idx];
-                                const nameEl = document.getElementById('activePeerName');
-                                if (nameEl) nameEl.innerText = sc.alias;
-                            }
+                        // Do not overwrite user-chosen alias!
+                        if (sc.target && (!contacts[idx].target || contacts[idx].target === 'local') && sc.target !== 'local') {
+                            contacts[idx].target = sc.target;
+                            contactsChanged = true;
+                        }
+                        if (sc.address && !contacts[idx].address) {
+                            contacts[idx].address = sc.address;
                             contactsChanged = true;
                         }
                         if (contacts[idx].last_message !== sc.last_message || contacts[idx].last_time !== sc.last_time || contacts[idx].status !== sc.status) {
@@ -4828,7 +4833,7 @@ function playAcousticTones() {
 function deleteActivePeer() {
     if (!activeContact) return;
     const alias = activeContact.alias;
-    const displayName = alias === 'Saved Messages' ? 'Personal notes' : (alias === 'xChat Assistant' ? 'AI helper' : alias);
+    const displayName = alias === 'xChat Assistant' ? 'AI helper' : alias;
     if (confirm(STRINGS.confirmDeleteChat(displayName))) {
         contacts = contacts.filter(c => c.alias !== alias);
         delete chatHistories[alias];

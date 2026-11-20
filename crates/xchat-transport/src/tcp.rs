@@ -42,6 +42,8 @@ impl TcpTransport {
                         tokio::spawn(async move {
                             if let Ok(envelope) = Self::read_framed_envelope(&mut socket).await {
                                 let _ = tx.send(envelope).await;
+                                let _ = socket.write_all(&[0x01]).await;
+                                let _ = socket.flush().await;
                             }
                         });
                     }
@@ -69,7 +71,7 @@ impl TcpTransport {
         }
     }
 
-    async fn read_framed_envelope<R: AsyncReadExt + Unpin>(
+    pub async fn read_framed_envelope<R: AsyncReadExt + Unpin>(
         stream: &mut R,
     ) -> Result<EncryptedEnvelope, TransportError> {
         let mut len_buf = [0u8; 4];
@@ -96,7 +98,7 @@ impl TcpTransport {
             .map_err(|e| TransportError::Serialization(e.to_string()))
     }
 
-    async fn write_framed_envelope<W: AsyncWriteExt + Unpin>(
+    pub async fn write_framed_envelope<W: AsyncWriteExt + Unpin>(
         stream: &mut W,
         envelope: &EncryptedEnvelope,
     ) -> Result<(), TransportError> {

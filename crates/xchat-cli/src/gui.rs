@@ -1078,13 +1078,32 @@ pub async fn handle_http_connection<S>(
         if let Ok(req) = serde_json::from_str::<AddContactReq>(&body) {
             let target_str = req.target.unwrap_or_default();
             let mut st = state_clone.lock().unwrap();
-            if let Some(existing) = st
-                .contacts
-                .iter_mut()
-                .find(|c| c.alias.eq_ignore_ascii_case(&req.alias))
-            {
+
+            // Match existing contact by cryptographic address first, then target socket, then alias
+            let mut existing_opt = None;
+            if let Some(ref req_addr) = req.address {
+                if !req_addr.is_empty() && req_addr != "local" {
+                    existing_opt = st.contacts.iter_mut().find(|c| c.address == *req_addr);
+                }
+            }
+            if existing_opt.is_none() && !target_str.is_empty() && target_str != "local" {
+                existing_opt = st.contacts.iter_mut().find(|c| c.target == target_str);
+            }
+            if existing_opt.is_none() {
+                existing_opt = st
+                    .contacts
+                    .iter_mut()
+                    .find(|c| c.alias.eq_ignore_ascii_case(&req.alias));
+            }
+
+            if let Some(existing) = existing_opt {
                 if !target_str.is_empty() {
                     existing.target = target_str;
+                }
+                if let Some(ref addr) = req.address {
+                    if !addr.is_empty() && existing.address.is_empty() {
+                        existing.address = addr.clone();
+                    }
                 }
             } else {
                 let addr = req.address.unwrap_or_else(|| {
@@ -1214,6 +1233,7 @@ pub async fn handle_http_connection<S>(
             // Handle Local Assistant / Saved Messages
             if req.alias == "xChat Assistant"
                 || (target_opt.as_deref() == Some("local") && req.alias == "Saved Messages")
+                || req.alias == "Saved Messages"
             {
                 {
                     let mut st = state_clone.lock().unwrap();
@@ -2978,5 +2998,74 @@ mod tests {
         let charlie_msgs = &loaded_messages["Charlie"];
         assert_eq!(charlie_msgs.len(), 1);
         assert_eq!(charlie_msgs[0].text, "See you at the rendezvous");
+    }
+
+    #[tokio::test]
+    async fn test_saved_messages_never_echoes_and_contact_dedup() {
+        let (state, _temp) = create_test_app_state().await;
+        let port = 8080;
+        let csrf_token = state.lock().unwrap().csrf_token.clone();
+
+        // 1. Send to "Saved Messages"
+        let send_body = r#"{"alias":"Saved Messages","text":"My private note"}"#;
+        let send_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, send_body.len(), send_body
+        );
+        let resp = send_test_http_request(port, state.clone(), &send_req).await;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"));
+
+        {
+            let st = state.lock().unwrap();
+            let saved_msgs = st
+                .messages
+                .get("Saved Messages")
+                .expect("Saved Messages history must exist");
+            assert_eq!(saved_msgs.len(), 1);
+            assert_eq!(saved_msgs[0].sender, "self");
+            assert_eq!(saved_msgs[0].text, "My private note");
+            // Must NOT contain any echo message!
+            assert!(!saved_msgs.iter().any(|m| m.text.contains("Echo")));
+        }
+
+        // 2. Add contact "Bob" with specific address and socket
+        let add_bob = r#"{"alias":"Bob","address":"xchat_bob_addr","target":"192.168.1.100:8080"}"#;
+        let add_req1 = format!(
+            "POST /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, add_bob.len(), add_bob
+        );
+        let resp1 = send_test_http_request(port, state.clone(), &add_req1).await;
+        assert!(resp1.starts_with("HTTP/1.1 200 OK"));
+
+        // 3. Discovered peer taps with different alias hint ("@user_a22040") but matching address or socket
+        let tap_peer =
+            r#"{"alias":"@user_a22040","address":"xchat_bob_addr","target":"192.168.1.100:8080"}"#;
+        let add_req2 = format!(
+            "POST /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, tap_peer.len(), tap_peer
+        );
+        let resp2 = send_test_http_request(port, state.clone(), &add_req2).await;
+        assert!(resp2.starts_with("HTTP/1.1 200 OK"));
+
+        {
+            let st = state.lock().unwrap();
+            // "Bob" must NOT have been renamed to "@user_a22040"
+            let bob = st
+                .contacts
+                .iter()
+                .find(|c| c.address == "xchat_bob_addr")
+                .expect("Bob must exist");
+            assert_eq!(bob.alias, "Bob");
+            // There must not be a duplicate contact created
+            let matching_count = st
+                .contacts
+                .iter()
+                .filter(|c| c.address == "xchat_bob_addr")
+                .count();
+            assert_eq!(
+                matching_count, 1,
+                "Must not create duplicate contact on matching address"
+            );
+        }
     }
 }

@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 use xchat_core::{
     burner::BurnerRoom,
     contacts::ContactBook,
@@ -571,20 +571,26 @@ async fn main() -> anyhow::Result<()> {
                                     let mut rn = relay_ref.lock().await;
                                     if let Err(e) = rn.forward_envelope(env, now) {
                                         eprintln!("[Relay] Forwarding error: {}", e);
+                                        let _ = socket.write_all(&[0x00]).await;
                                     } else {
                                         println!(
                                             "[Relay] Envelope stored safely: ID={} DestToken={} Total buffered: {}",
                                             msg_id, dest, rn.total_stored()
                                         );
+                                        let _ = socket.write_all(&[0x01]).await;
                                     }
+                                    let _ = socket.flush().await;
+                                } else {
+                                    let _ = socket.write_all(&[0x00]).await;
                                 }
                             }
                         }
                     });
                 }
             } else {
-                let tcp = TcpTransport::bind(&bind_addr).await?;
-                println!("[+] TCP Transport active on {}", tcp.local_addr());
+                let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+                let local_addr = listener.local_addr()?;
+                println!("[+] TCP Transport active on {}", local_addr);
                 let keystore_path = crate::gui::get_keystore_path();
                 let mut keystore = KeyStore::load_or_generate(&keystore_path)
                     .unwrap_or_else(|_| KeyStore::generate());
@@ -598,47 +604,15 @@ async fn main() -> anyhow::Result<()> {
                 let mut active_sessions: std::collections::HashMap<String, Session> =
                     std::collections::HashMap::new();
 
-                while let Ok(env) = tcp.receive_envelope().await {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)?
-                        .as_secs();
-
-                    if env.x3dh_init.is_some() {
-                        match Session::respond_inbound(&mut keystore, &env, now) {
-                            Ok((session, pt)) => {
-                                let sender_addr = session.peer_identity.address();
-                                println!(
-                                    "[Peer] 📩 New Session! Message from {}: \"{}\"",
-                                    sender_addr,
-                                    String::from_utf8_lossy(&pt)
-                                );
-                                active_sessions.insert(sender_addr, session);
-                                let _ = keystore.save_to_path(&keystore_path);
-                            }
-                            Err(e) => {
-                                println!("[Peer] Inbound envelope could not be decrypted: {}", e);
-                            }
-                        }
-                    } else {
-                        let mut decrypted = false;
-                        for (sender_addr, session) in active_sessions.iter_mut() {
-                            if let Ok(pt) = session.decrypt_message(&env, now) {
-                                println!(
-                                    "[Peer] 📩 Ratcheted message from {}: \"{}\"",
-                                    sender_addr,
-                                    String::from_utf8_lossy(&pt)
-                                );
-                                decrypted = true;
-                                break;
-                            }
-                        }
-                        if !decrypted {
-                            println!(
-                                "[Peer] Inbound envelope received. Size: {} bytes, Hops: {}",
-                                env.ciphertext.len(),
-                                env.header.hop_count
-                            );
-                        }
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    if process_daemon_inbound_stream(
+                        &mut socket,
+                        &mut keystore,
+                        &mut active_sessions,
+                    )
+                    .await
+                    {
+                        let _ = keystore.save_to_path(&keystore_path);
                     }
                 }
             }
@@ -707,9 +681,31 @@ async fn main() -> anyhow::Result<()> {
             println!("Ciphertext Size:    {} bytes", envelope.ciphertext.len());
             println!("Protocol:           X3DH + Double Ratchet + ChaCha20-Poly1305");
 
-            let tcp = TcpTransport::bind("127.0.0.1:0").await?;
-            tcp.send_envelope(&target, &envelope).await?;
-            println!("[✓] Message transmitted successfully across network socket!");
+            let mut stream = tokio::net::TcpStream::connect(&target).await?;
+            TcpTransport::write_framed_envelope(&mut stream, &envelope).await?;
+            let mut ack = [0u8; 1];
+            match stream.read_exact(&mut ack).await {
+                Ok(_) => {
+                    if ack[0] == 0x01 {
+                        println!("[✓] Message transmitted successfully across network socket!");
+                    } else {
+                        eprintln!("[✗] Delivery failed: peer daemon rejected envelope (nack)");
+                        return Err(anyhow::anyhow!(
+                            "Delivery failed: peer daemon rejected envelope (nack)"
+                        ));
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[✗] Delivery failed: peer closed connection without ack ({})",
+                        e
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Delivery failed: peer closed connection without ack ({})",
+                        e
+                    ));
+                }
+            }
         }
 
         Commands::Fetch { relay, token } => {
@@ -1451,6 +1447,65 @@ pub async fn execute_fetch_envelopes(
     Ok((total_fetched, total_decrypted, decrypted_messages))
 }
 
+pub async fn process_daemon_inbound_stream<
+    S: tokio::io::AsyncReadExt + tokio::io::AsyncWriteExt + Unpin,
+>(
+    mut socket: S,
+    keystore: &mut KeyStore,
+    active_sessions: &mut HashMap<String, Session>,
+) -> bool {
+    if let Ok(env) = TcpTransport::read_framed_envelope(&mut socket).await {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let mut success = false;
+        if env.x3dh_init.is_some() {
+            match Session::respond_inbound(keystore, &env, now) {
+                Ok((session, pt)) => {
+                    let sender_addr = session.peer_identity.address();
+                    println!(
+                        "[Peer] 📩 New Session! Message from {}: \"{}\"",
+                        sender_addr,
+                        String::from_utf8_lossy(&pt)
+                    );
+                    active_sessions.insert(sender_addr, session);
+                    success = true;
+                }
+                Err(e) => {
+                    println!("[Peer] Inbound envelope could not be decrypted: {}", e);
+                }
+            }
+        } else {
+            for (sender_addr, session) in active_sessions.iter_mut() {
+                if let Ok(pt) = session.decrypt_message(&env, now) {
+                    println!(
+                        "[Peer] 📩 Ratcheted message from {}: \"{}\"",
+                        sender_addr,
+                        String::from_utf8_lossy(&pt)
+                    );
+                    success = true;
+                    break;
+                }
+            }
+            if !success {
+                println!(
+                    "[Peer] Inbound envelope could not be decrypted/rejected. Size: {} bytes, Hops: {}",
+                    env.ciphertext.len(),
+                    env.header.hop_count
+                );
+            }
+        }
+        let ack_byte = if success { 0x01u8 } else { 0x00u8 };
+        let _ = socket.write_all(&[ack_byte]).await;
+        let _ = socket.flush().await;
+        success
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1563,5 +1618,93 @@ mod tests {
         assert_eq!(decrypted, 1);
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0], "Top secret intel stored while Bob was offline");
+    }
+
+    #[tokio::test]
+    async fn test_cli_send_ack_and_nack_on_rejection() {
+        let bob_ks = Arc::new(tokio::sync::Mutex::new(KeyStore::generate()));
+        let bob_bundle = bob_ks.lock().await.export_bundle();
+        let bob_sessions = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+        let alice_ks = KeyStore::generate();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let bob_token = bob_bundle
+            .identity_key
+            .ephemeral_discovery_token(now / 3600);
+        let (_alice_session, env1) = Session::initiate_outbound(
+            &alice_ks,
+            &bob_bundle,
+            b"Hello Bob from CLI send!",
+            bob_token,
+            now,
+            86400,
+        )
+        .unwrap();
+
+        // 1. Inbound envelope 1 (valid initial handshake) -> returns ack 0x01
+        let (mut client1, server1) = tokio::io::duplex(2048);
+        let ks1 = bob_ks.clone();
+        let sess1 = bob_sessions.clone();
+        let srv1 = tokio::spawn(async move {
+            let mut ks = ks1.lock().await;
+            let mut sess = sess1.lock().await;
+            process_daemon_inbound_stream(server1, &mut ks, &mut sess).await
+        });
+        TcpTransport::write_framed_envelope(&mut client1, &env1)
+            .await
+            .unwrap();
+        let mut ack1 = [0u8; 1];
+        client1.read_exact(&mut ack1).await.unwrap();
+        assert_eq!(
+            ack1[0], 0x01,
+            "Valid inbound envelope must receive 0x01 ack"
+        );
+        let res1 = srv1.await.unwrap();
+        assert!(res1);
+
+        // 2. Inbound envelope 1 replayed (reused OPK) -> returns nack 0x00
+        let (mut client2, server2) = tokio::io::duplex(2048);
+        let ks2 = bob_ks.clone();
+        let sess2 = bob_sessions.clone();
+        let srv2 = tokio::spawn(async move {
+            let mut ks = ks2.lock().await;
+            let mut sess = sess2.lock().await;
+            process_daemon_inbound_stream(server2, &mut ks, &mut sess).await
+        });
+        TcpTransport::write_framed_envelope(&mut client2, &env1)
+            .await
+            .unwrap();
+        let mut ack2 = [0u8; 1];
+        client2.read_exact(&mut ack2).await.unwrap();
+        assert_eq!(ack2[0], 0x00, "Reused OPK envelope must receive 0x00 nack");
+        let res2 = srv2.await.unwrap();
+        assert!(!res2);
+
+        // 3. Corrupted envelope -> returns nack 0x00
+        let mut corrupt_env = env1.clone();
+        corrupt_env.x3dh_init = None; // not a handshake and not matching any ratcheted session
+        let (mut client3, server3) = tokio::io::duplex(2048);
+        let ks3 = bob_ks.clone();
+        let sess3 = bob_sessions.clone();
+        let srv3 = tokio::spawn(async move {
+            let mut ks = ks3.lock().await;
+            let mut sess = sess3.lock().await;
+            process_daemon_inbound_stream(server3, &mut ks, &mut sess).await
+        });
+        TcpTransport::write_framed_envelope(&mut client3, &corrupt_env)
+            .await
+            .unwrap();
+        let mut ack3 = [0u8; 1];
+        client3.read_exact(&mut ack3).await.unwrap();
+        assert_eq!(
+            ack3[0], 0x00,
+            "Corrupted/unmatched envelope must receive 0x00 nack"
+        );
+        let res3 = srv3.await.unwrap();
+        assert!(!res3);
     }
 }
