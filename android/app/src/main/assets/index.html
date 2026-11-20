@@ -3306,17 +3306,52 @@ function cancelSosHold() {
     if (ring) ring.style.setProperty('--sos-progress', '0');
 }
 
+function sendSosPayload(lat, lon) {
+    const payload = {
+        lat: lat || 0.0,
+        lon: lon || 0.0,
+        message: "Emergency SOS! Need immediate assistance."
+    };
+    fetch(API_BASE + '/api/sos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(data => {
+        const reached = (data && typeof data.peers_reached === 'number') ? data.peers_reached : 0;
+        showToast(`Emergency alert sent. Reached ${reached} nearby peer${reached === 1 ? '' : 's'}.`);
+    })
+    .catch(_err => {
+        showToast("Failed to broadcast emergency alert.");
+    });
+}
+
 function executeSos() {
     cancelSosHold();
     if (window.AndroidBridge && window.AndroidBridge.triggerSosHaptics) {
         window.AndroidBridge.triggerSosHaptics();
     }
-    if (!isNative) {
-        fetch(API_BASE + '/api/sos', { method: 'POST' }).catch(() => {});
-    }
-    showToast(STRINGS.toastSosSent);
     const overlay = document.getElementById('sosGuardOverlay');
     if (overlay) overlay.style.display = 'none';
+
+    if (!isNative) {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                pos => {
+                    sendSosPayload(pos.coords.latitude, pos.coords.longitude);
+                },
+                _err => {
+                    sendSosPayload(0.0, 0.0);
+                },
+                { timeout: 5000, enableHighAccuracy: true }
+            );
+        } else {
+            sendSosPayload(0.0, 0.0);
+        }
+    } else {
+        showToast(STRINGS.toastSosSent);
+    }
 }
 
 // App Init
@@ -3964,11 +3999,19 @@ async function pollServerMessages() {
                     if (idx === -1) {
                         contacts.push(sc);
                         contactsChanged = true;
+                        if (sc.status && sc.status.includes('EMERGENCY ACTIVE') && !window['_alerted_' + sc.address]) {
+                            window['_alerted_' + sc.address] = true;
+                            showToast('🚨 EMERGENCY ALERT from ' + sc.alias + ': ' + sc.last_message);
+                        }
                         if (!activeContact || activeContact.alias === 'Saved Messages') {
                             activeContact = sc;
                         }
                     } else {
                         const oldAlias = contacts[idx].alias;
+                        if (sc.status && sc.status.includes('EMERGENCY ACTIVE') && !window['_alerted_' + sc.address]) {
+                            window['_alerted_' + sc.address] = true;
+                            showToast('🚨 EMERGENCY ALERT from ' + sc.alias + ': ' + sc.last_message);
+                        }
                         if (oldAlias !== sc.alias) {
                             contacts[idx].alias = sc.alias;
                             if (activeContact && (activeContact.alias === oldAlias || activeContact.address === sc.address)) {

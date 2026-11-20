@@ -1505,6 +1505,96 @@ pub async fn handle_http_connection<S>(
             return;
         }
 
+        // Check if this envelope is a signed SOS Emergency Distress Beacon
+        if envelope.header.destination_token == xchat_core::sos::EMERGENCY_BROADCAST_TOKEN {
+            match xchat_core::sos::decode_emergency_beacon(&envelope, now_ts) {
+                Ok(beacon) => {
+                    let now_str = get_now_time_string();
+                    let sender_addr = beacon.sender_address.clone();
+                    let alert_text = format!(
+                        "🚨 EMERGENCY ALERT: {}\nCoordinates: ({:.4}, {:.4})\nSender: {}",
+                        beacon.emergency_message, beacon.latitude, beacon.longitude, sender_addr
+                    );
+
+                    let msg = ChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        sender: "peer".to_string(),
+                        text: alert_text.clone(),
+                        time: now_str.clone(),
+                        status: "emergency".to_string(),
+                    };
+
+                    {
+                        let mut st = state_clone.lock().unwrap();
+                        let emergency_alias =
+                            format!("🚨 SOS: {}", &sender_addr[..8.min(sender_addr.len())]);
+                        if let Some(c) = st.contacts.iter_mut().find(|c| c.address == sender_addr) {
+                            c.last_message = alert_text.clone();
+                            c.last_time = now_str.clone();
+                            c.status = "🚨 EMERGENCY ACTIVE".to_string();
+                        } else {
+                            st.contacts.insert(
+                                0,
+                                ContactEntry {
+                                    alias: emergency_alias.clone(),
+                                    address: sender_addr.clone(),
+                                    target: sender_socket_opt.unwrap_or_default(),
+                                    status: "🚨 EMERGENCY ACTIVE".to_string(),
+                                    last_message: alert_text.clone(),
+                                    last_time: now_str.clone(),
+                                },
+                            );
+                        }
+
+                        let target_contact_alias = st
+                            .contacts
+                            .iter()
+                            .find(|c| c.address == sender_addr)
+                            .map(|c| c.alias.clone())
+                            .unwrap_or(emergency_alias);
+
+                        st.messages
+                            .entry(target_contact_alias)
+                            .or_default()
+                            .push(msg.clone());
+                        st.messages.entry(sender_addr).or_default().push(msg);
+
+                        let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
+                            Some(&st.session_store_path),
+                        )
+                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                        let _ = save_messages_encrypted(
+                            &st.messages,
+                            &st.messages_store_path,
+                            &storage_key,
+                        );
+                        let _ = save_contacts_encrypted(
+                            &st.contacts,
+                            &st.contacts_store_path,
+                            &storage_key,
+                        );
+                    }
+
+                    let resp = json_response(
+                        "200 OK",
+                        r#"{"status":"delivered","type":"emergency_sos","authenticated":true}"#,
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+                Err(e) => {
+                    let resp = json_response(
+                        "401 Unauthorized",
+                        &format!(r#"{{"error":"Invalid SOS beacon: {:?}"}}"#, e),
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+            }
+        }
+
         // Check if this envelope belongs to an ephemeral Burner Room
         let burner_match = {
             let mut st = state_clone.lock().unwrap();
@@ -2217,6 +2307,81 @@ mod tests {
             .expect("Carol's message must exist under her cryptographic address");
         assert_eq!(carol_msgs.len(), 1);
         assert_eq!(carol_msgs[0].text, "I am really Carol");
+    }
+
+    #[tokio::test]
+    async fn test_sos_beacon_receive_and_verification() {
+        let (state, _temp) = create_test_app_state().await;
+        let alice_id = IdentityKeyPair::generate();
+        let alice_addr = alice_id.public_key().address();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let beacon_env = xchat_core::sos::create_emergency_beacon(
+            &alice_id,
+            37.7749,
+            -122.4194,
+            "Urgent medical assistance required!",
+            now,
+            7200,
+        )
+        .unwrap();
+
+        let wire = WireMessageEnvelope {
+            envelope: beacon_env,
+            sender_alias: Some(format!("SOS: {}", alice_addr)),
+            sender_socket: Some("192.168.1.50:8080".to_string()),
+            sender_address: Some(alice_addr.clone()),
+        };
+        let body = serde_json::to_string(&wire).unwrap();
+
+        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
+        let port = listener_opt
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(8080);
+        if let Some(listener) = listener_opt {
+            let state_srv = state.clone();
+            tokio::spawn(run_server_loop(
+                listener,
+                state_srv,
+                "127.0.0.1".to_string(),
+            ));
+        }
+
+        let req = format!(
+            "POST /api/receive HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port,
+            body.len(),
+            body
+        );
+        let resp_str = send_test_http_request(port, state.clone(), &req).await;
+        assert!(
+            resp_str.starts_with("HTTP/1.1 200 OK"),
+            "Got response: {}",
+            resp_str
+        );
+        assert!(resp_str.contains("emergency_sos"));
+
+        let st = state.lock().unwrap();
+        let emergency_contact = st
+            .contacts
+            .iter()
+            .find(|c| c.address == alice_addr)
+            .expect("Emergency contact must be registered");
+        assert!(emergency_contact.status.contains("EMERGENCY ACTIVE"));
+
+        let msgs = st
+            .messages
+            .get(&alice_addr)
+            .expect("Alert message must be stored");
+        assert_eq!(msgs.len(), 1);
+        assert!(msgs[0].text.contains("37.7749"));
+        assert!(msgs[0].text.contains("-122.4194"));
+        assert!(msgs[0].text.contains("Urgent medical assistance required!"));
     }
 
     #[tokio::test]
