@@ -2712,6 +2712,25 @@ details.expander[open] {
 
 <script src="jsqr.min.js"></script>
 <script>
+// Automatically attach per-launch CSRF token to all /api/ fetch calls
+(function() {
+    const originalFetch = window.fetch;
+    window.fetch = function(url, init) {
+        init = init || {};
+        const token = window.__XCHAT_CSRF_TOKEN__ || (document.querySelector('meta[name="xchat-csrf-token"]')?.content) || '';
+        if (token && typeof url === 'string' && url.includes('/api/')) {
+            if (init.headers instanceof Headers) {
+                init.headers.set('X-XChat-Token', token);
+            } else if (Array.isArray(init.headers)) {
+                init.headers.push(['X-XChat-Token', token]);
+            } else {
+                init.headers = Object.assign({}, init.headers, { 'X-XChat-Token': token });
+            }
+        }
+        return originalFetch(url, init);
+    };
+})();
+
 // Plain-English strings dictionary
 const STRINGS = {
     appName: "xChat",

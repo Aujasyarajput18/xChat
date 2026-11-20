@@ -26,7 +26,7 @@ fn test_chaos_clock_jump_ttl_expiration() {
     )
     .unwrap();
 
-    let (mut bob, _) = Session::respond_inbound(&bob_ks, &init_env, created_at).unwrap();
+    let (mut bob, _) = Session::respond_inbound(&mut bob_ks, &init_env, created_at).unwrap();
 
     // 1. Delivery within TTL window succeeds
     let env_normal = alice
@@ -93,7 +93,7 @@ fn test_chaos_dropped_packets_ratchet_recovery() {
         Session::initiate_outbound(&alice_ks, &bob_bundle, b"Message 0", [0x22; 16], now, 3600)
             .unwrap();
 
-    let (mut bob, pt0) = Session::respond_inbound(&bob_ks, &init_env, now).unwrap();
+    let (mut bob, pt0) = Session::respond_inbound(&mut bob_ks, &init_env, now).unwrap();
     assert_eq!(pt0, b"Message 0");
 
     // Alice generates additional messages: [M1 (dropped), M2 (dropped), M3, M4]

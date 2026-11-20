@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use rand::{rngs::OsRng, RngCore};
@@ -84,6 +84,23 @@ impl KeyStore {
         }
     }
 
+    /// Replenish one-time prekeys up to the target count if running low.
+    pub fn replenish_one_time_prekeys(&mut self, target_count: usize) {
+        let current = self.one_time_prekeys.len();
+        if current < target_count {
+            let max_id = self
+                .one_time_prekeys
+                .iter()
+                .map(|k| k.id)
+                .max()
+                .unwrap_or(0);
+            for i in 1..=(target_count - current) {
+                self.one_time_prekeys
+                    .push(OneTimePrekeyPair::generate(max_id + i as u32));
+            }
+        }
+    }
+
     /// Rotate the signed prekey using the device identity key.
     pub fn rotate_signed_prekey(&mut self) {
         self.signed_prekey = SignedPrekeyPair::generate(&self.identity);
@@ -120,13 +137,33 @@ impl KeyStore {
         output.extend_from_slice(&nonce);
         output.extend_from_slice(&ciphertext);
 
+        Self::write_secure_file(path, &output)
+    }
+
+    /// Internal helper to write a file with 0600 permissions on Unix.
+    pub fn write_secure_file(path: &Path, data: &[u8]) -> Result<(), CoreError> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| CoreError::StorageError(e.to_string()))?;
         }
 
-        let mut file = File::create(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
-        file.write_all(&output)
-            .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut opt = fs::OpenOptions::new();
+            opt.write(true).create(true).truncate(true).mode(0o600);
+            let mut file = opt
+                .open(path)
+                .map_err(|e| CoreError::StorageError(e.to_string()))?;
+            file.write_all(data)
+                .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        }
+        #[cfg(not(unix))]
+        {
+            let mut file =
+                File::create(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
+            file.write_all(data)
+                .map_err(|e| CoreError::StorageError(e.to_string()))?;
+        }
         Ok(())
     }
 
@@ -184,21 +221,100 @@ impl KeyStore {
         })
     }
 
-    /// Default device encryption key for local zero-config persistent storage.
+    /// Legacy default device encryption key used for backwards-compatible migration of v1 keystores.
     pub const DEFAULT_STORAGE_KEY: [u8; 32] = [
         0x58, 0x43, 0x68, 0x61, 0x74, 0x2d, 0x44, 0x65, 0x76, 0x69, 0x63, 0x65, 0x2d, 0x4b, 0x65,
         0x79, 0x73, 0x74, 0x6f, 0x72, 0x65, 0x2d, 0x56, 0x61, 0x75, 0x6c, 0x74, 0x2d, 0x4b, 0x65,
         0x79, 0x21,
     ];
 
-    /// Save keystore to disk using the local device storage key.
+    /// Derive or retrieve a secure per-device encryption key.
+    /// Priority:
+    /// 1. `XCHAT_PASSPHRASE` environment variable (derived using HKDF-SHA256)
+    /// 2. `XCHAT_STORAGE_KEY` environment variable (hex-encoded 32-byte key)
+    /// 3. Secure random key saved in `path.with_file_name(".xchat_device_key")` or `~/.xchat_device_key` with 0600 mode
+    pub fn get_or_create_device_storage_key_for_path(
+        path: Option<&Path>,
+    ) -> Result<[u8; 32], CoreError> {
+        if let Ok(pass) = std::env::var("XCHAT_PASSPHRASE") {
+            if !pass.trim().is_empty() {
+                let hk = hkdf::Hkdf::<sha2::Sha256>::new(
+                    Some(b"xchat-keystore-passphrase-salt-v1"),
+                    pass.as_bytes(),
+                );
+                let mut key = [0u8; 32];
+                hk.expand(b"xchat-device-storage-key", &mut key)
+                    .map_err(|e| {
+                        CoreError::Crypto(xchat_crypto::errors::CryptoError::AeadError(
+                            e.to_string(),
+                        ))
+                    })?;
+                return Ok(key);
+            }
+        }
+        if let Ok(hex_key) = std::env::var("XCHAT_STORAGE_KEY") {
+            if let Ok(bytes) = hex::decode(hex_key.trim()) {
+                if bytes.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&bytes);
+                    return Ok(key);
+                }
+            }
+        }
+        let key_path = if let Ok(custom) = std::env::var("XCHAT_DEVICE_KEY_PATH") {
+            PathBuf::from(custom)
+        } else if let Some(p) = path {
+            p.with_file_name(".xchat_device_key")
+        } else if let Ok(home) = std::env::var("HOME") {
+            PathBuf::from(home).join(".xchat_device_key")
+        } else {
+            PathBuf::from(".xchat_device_key")
+        };
+        if key_path.exists() {
+            if let Ok(data) = fs::read(&key_path) {
+                if data.len() == 32 {
+                    let mut key = [0u8; 32];
+                    key.copy_from_slice(&data);
+                    return Ok(key);
+                }
+            }
+        }
+        let mut key = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key);
+        let _ = Self::write_secure_file(&key_path, &key);
+        Ok(key)
+    }
+
+    /// Default lookup using standard device key location.
+    pub fn get_or_create_device_storage_key() -> Result<[u8; 32], CoreError> {
+        Self::get_or_create_device_storage_key_for_path(None)
+    }
+
+    /// Save keystore to disk using the local device storage key (with 0600 permissions).
     pub fn save_to_path(&self, path: &Path) -> Result<(), CoreError> {
-        self.save_encrypted(path, &Self::DEFAULT_STORAGE_KEY)
+        let key = Self::get_or_create_device_storage_key_for_path(Some(path))?;
+        self.save_encrypted(path, &key)
     }
 
     /// Load keystore from disk using the local device storage key.
+    /// If loading with the device key fails, it automatically falls back to the legacy
+    /// `DEFAULT_STORAGE_KEY` and re-encrypts with the device key (seamless migration).
     pub fn load_from_path(path: &Path) -> Result<Self, CoreError> {
-        Self::load_encrypted(path, &Self::DEFAULT_STORAGE_KEY)
+        let device_key = Self::get_or_create_device_storage_key_for_path(Some(path))?;
+        match Self::load_encrypted(path, &device_key) {
+            Ok(ks) => Ok(ks),
+            Err(_) => {
+                // Migration path: attempt legacy key
+                match Self::load_encrypted(path, &Self::DEFAULT_STORAGE_KEY) {
+                    Ok(legacy_ks) => {
+                        // Re-encrypt immediately under device key with 0600 mode
+                        let _ = legacy_ks.save_encrypted(path, &device_key);
+                        Ok(legacy_ks)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        }
     }
 
     /// Load existing keystore or generate and persist a fresh one for communication.

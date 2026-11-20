@@ -49,7 +49,7 @@ async fn test_multi_hop_blind_relay_delivery() {
 
     // Bob receives from Relay 2 and decrypts
     let (mut bob_session, decrypted) =
-        Session::respond_inbound(&bob_keystore, &final_envelope, now + 10)
+        Session::respond_inbound(&mut bob_keystore, &final_envelope, now + 10)
             .expect("Bob responds inbound");
     assert_eq!(decrypted, b"Secret multi-hop test packet");
 
@@ -101,7 +101,7 @@ async fn test_transport_handover_resilience() {
     alice_ble.send_envelope("bob", &env1).await.unwrap();
     let received_ble = bob_ble.receive_envelope().await.unwrap();
     let (mut bob_session, pt1) =
-        Session::respond_inbound(&bob_keystore, &received_ble, now + 1).unwrap();
+        Session::respond_inbound(&mut bob_keystore, &received_ble, now + 1).unwrap();
     assert_eq!(pt1, b"Message 1 over Bluetooth LE");
 
     // 2. Bluetooth radio FAILS / drops connection!
@@ -165,7 +165,7 @@ async fn test_skipped_keys_and_out_of_order_packets() {
     .unwrap();
 
     let (mut bob_session, pt0) =
-        Session::respond_inbound(&bob_keystore, &env_init, now + 1).unwrap();
+        Session::respond_inbound(&mut bob_keystore, &env_init, now + 1).unwrap();
     assert_eq!(pt0, b"Packet 0 (Init)");
 
     // Alice sends Packets 1, 2, 3, 4

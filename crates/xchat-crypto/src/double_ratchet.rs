@@ -41,6 +41,92 @@ pub struct DoubleRatchet {
     skipped_message_keys: HashMap<([u8; 32], u32), [u8; 32]>,
 }
 
+impl Clone for DoubleRatchet {
+    fn clone(&self) -> Self {
+        Self {
+            dhs: StaticSecret::from(self.dhs.to_bytes()),
+            dhr: self.dhr,
+            rk: self.rk,
+            cks: self.cks,
+            ckr: self.ckr,
+            ns: self.ns,
+            nr: self.nr,
+            pn: self.pn,
+            skipped_message_keys: self.skipped_message_keys.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for DoubleRatchet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DoubleRatchet")
+            .field("dhr", &self.dhr)
+            .field("ns", &self.ns)
+            .field("nr", &self.nr)
+            .field("pn", &self.pn)
+            .finish()
+    }
+}
+
+type SkippedKeyEntry = (([u8; 32], u32), [u8; 32]);
+
+#[derive(Serialize, Deserialize)]
+struct DoubleRatchetData {
+    dhs: [u8; 32],
+    dhr: Option<[u8; 32]>,
+    rk: [u8; 32],
+    cks: Option<[u8; 32]>,
+    ckr: Option<[u8; 32]>,
+    ns: u32,
+    nr: u32,
+    pn: u32,
+    skipped_message_keys: Vec<SkippedKeyEntry>,
+}
+
+impl Serialize for DoubleRatchet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let data = DoubleRatchetData {
+            dhs: self.dhs.to_bytes(),
+            dhr: self.dhr,
+            rk: self.rk,
+            cks: self.cks,
+            ckr: self.ckr,
+            ns: self.ns,
+            nr: self.nr,
+            pn: self.pn,
+            skipped_message_keys: self
+                .skipped_message_keys
+                .iter()
+                .map(|(k, v)| (*k, *v))
+                .collect(),
+        };
+        data.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DoubleRatchet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let data = DoubleRatchetData::deserialize(deserializer)?;
+        Ok(Self {
+            dhs: StaticSecret::from(data.dhs),
+            dhr: data.dhr,
+            rk: data.rk,
+            cks: data.cks,
+            ckr: data.ckr,
+            ns: data.ns,
+            nr: data.nr,
+            pn: data.pn,
+            skipped_message_keys: data.skipped_message_keys.into_iter().collect(),
+        })
+    }
+}
+
 impl DoubleRatchet {
     /// Initialize Alice (the party who sends the first message after X3DH).
     pub fn init_alice(shared_secret: &[u8; 32], bob_dh_pubkey: &[u8; 32]) -> Self {

@@ -498,7 +498,7 @@ async fn main() -> anyhow::Result<()> {
                         .as_secs();
 
                     if env.x3dh_init.is_some() {
-                        match Session::respond_inbound(&keystore, &env, now) {
+                        match Session::respond_inbound(&mut keystore, &env, now) {
                             Ok((session, pt)) => {
                                 let sender_addr = session.peer_identity.address();
                                 println!(
@@ -507,6 +507,7 @@ async fn main() -> anyhow::Result<()> {
                                     String::from_utf8_lossy(&pt)
                                 );
                                 active_sessions.insert(sender_addr, session);
+                                let _ = keystore.save_to_path(&keystore_path);
                             }
                             Err(e) => {
                                 println!("[Peer] Inbound envelope could not be decrypted: {}", e);
@@ -560,14 +561,34 @@ async fn main() -> anyhow::Result<()> {
             let route_token = recipient_bundle
                 .identity_key
                 .ephemeral_discovery_token(now / 3600);
-            let (_session, envelope) = Session::initiate_outbound(
-                &keystore,
-                &recipient_bundle,
-                message.as_bytes(),
-                route_token,
-                now,
-                86400,
-            )?;
+
+            let recipient_addr = recipient_bundle.identity_key.address();
+            let session_path = keystore_path.with_file_name(".xchat_sessions.bin");
+            let storage_key = KeyStore::get_or_create_device_storage_key()
+                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+            let mut sessions =
+                xchat_core::session::load_sessions_encrypted(&session_path, &storage_key)
+                    .unwrap_or_default();
+
+            let envelope = if let Some(session) = sessions.get_mut(&recipient_addr) {
+                session.encrypt_message(message.as_bytes(), route_token, now, 86400)?
+            } else {
+                let (session, env) = Session::initiate_outbound(
+                    &keystore,
+                    &recipient_bundle,
+                    message.as_bytes(),
+                    route_token,
+                    now,
+                    86400,
+                )?;
+                sessions.insert(recipient_addr.clone(), session);
+                env
+            };
+            let _ = xchat_core::session::save_sessions_encrypted(
+                &sessions,
+                &session_path,
+                &storage_key,
+            );
 
             println!("=======================================================");
             println!("   xChat Direct Secure Send over Network Socket");
@@ -868,7 +889,7 @@ async fn run_comprehensive_mesh_simulation(nodes: usize) -> anyhow::Result<()> {
 
     // 7. Bob establishes session and decrypts
     let (mut bob_session, decrypted_1) =
-        Session::respond_inbound(&bob_keystore, &bob_received_env, now + 10)?;
+        Session::respond_inbound(&mut bob_keystore, &bob_received_env, now + 10)?;
     println!("\n[Step 6] Bob decrypts message:");
     println!(
         "         Decrypted text: \"{}\"",
@@ -1050,7 +1071,7 @@ async fn run_two_nodes_live_test(port1: u16, port2: u16) -> anyhow::Result<()> {
     // 4. Machine 2 receives and decrypts Message #1
     let received_env1 = tcp2.receive_envelope().await?;
     let (mut session_node2, decrypted1) =
-        Session::respond_inbound(&keystore2, &received_env1, now)?;
+        Session::respond_inbound(&mut keystore2, &received_env1, now)?;
     println!("    [Machine 2] Inbound envelope received from socket!");
     println!(
         "    [Machine 2] Verified sender identity: {}",

@@ -107,7 +107,7 @@ fn test_stress_double_ratchet_conversation_soak() {
     )
     .unwrap();
 
-    let (mut bob_session, pt_init) = Session::respond_inbound(&bob_ks, &init_env, now).unwrap();
+    let (mut bob_session, pt_init) = Session::respond_inbound(&mut bob_ks, &init_env, now).unwrap();
     assert_eq!(pt_init, b"Initial Handshake");
 
     let rounds = 500;

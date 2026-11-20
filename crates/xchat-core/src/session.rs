@@ -1,3 +1,6 @@
+use std::{collections::HashMap, path::Path};
+
+use serde::{Deserialize, Serialize};
 use xchat_crypto::{
     double_ratchet::DoubleRatchet,
     identity::IdentityPublicKey,
@@ -13,6 +16,7 @@ use crate::{
 
 /// High-level 1:1 secure session between two cryptographic identities.
 /// Coordinates X3DH key establishment, continuous Double Ratchet, and anti-replay protection.
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Session {
     pub peer_identity: IdentityPublicKey,
     ratchet: DoubleRatchet,
@@ -62,7 +66,7 @@ impl Session {
 
     /// Bob responds to Alice's initial inbound message envelope, establishing his session.
     pub fn respond_inbound(
-        recipient_keystore: &KeyStore,
+        recipient_keystore: &mut KeyStore,
         envelope: &EncryptedEnvelope,
         now: u64,
     ) -> Result<(Self, Vec<u8>), CoreError> {
@@ -74,7 +78,7 @@ impl Session {
             CoreError::SessionError("Initial envelope missing Ratchet header".into())
         })?;
 
-        // 1. Perform X3DH response
+        // 1. Perform X3DH response (verifies OPK exists in recipient_keystore)
         let shared_secret = x3dh_respond(
             &recipient_keystore.identity,
             &recipient_keystore.signed_prekey.secret,
@@ -82,17 +86,30 @@ impl Session {
             x3dh_init,
         )?;
 
-        // 2. Initialize Double Ratchet as Bob (recipient)
+        // 2. Consume OPK if used (enforce single-use forward secrecy)
+        if let Some(used_opk) = x3dh_init.used_one_time_prekey {
+            if recipient_keystore
+                .consume_one_time_prekey(&used_opk)
+                .is_none()
+            {
+                return Err(CoreError::SessionError(
+                    "Referenced One-Time Prekey already consumed".into(),
+                ));
+            }
+            recipient_keystore.replenish_one_time_prekeys(10);
+        }
+
+        // 3. Initialize Double Ratchet as Bob (recipient)
         let mut ratchet = DoubleRatchet::init_bob(
             &shared_secret,
             x3dh_dalek_clone(&recipient_keystore.signed_prekey.secret),
         );
 
-        // 3. Check anti-replay
+        // 4. Check anti-replay
         let mut replay_filter = ReplayFilter::new();
         replay_filter.check_and_record(&envelope.header.message_id, now)?;
 
-        // 4. Decrypt initial payload
+        // 5. Decrypt initial payload
         let aad = envelope.header.to_aad();
         let plaintext = ratchet.ratchet_decrypt(ratchet_header, &envelope.ciphertext, &aad)?;
 
@@ -164,6 +181,58 @@ fn x3dh_dalek_clone(secret: &x25519_dalek::StaticSecret) -> x25519_dalek::Static
     x25519_dalek::StaticSecret::from(secret.to_bytes())
 }
 
+/// Persist an in-memory session map encrypted on disk with 0600 permissions.
+pub fn save_sessions_encrypted(
+    sessions: &HashMap<String, Session>,
+    path: &Path,
+    encryption_key: &[u8; 32],
+) -> Result<(), CoreError> {
+    let bytes = bincode::serialize(sessions).map_err(|e| CoreError::StorageError(e.to_string()))?;
+    let mut nonce = [0u8; 12];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut nonce);
+    let ciphertext = xchat_crypto::aead::encrypt_aead(
+        encryption_key,
+        &nonce,
+        &bytes,
+        b"xchat-sessions-vault-v1",
+    )
+    .map_err(CoreError::Crypto)?;
+    let mut out = Vec::with_capacity(12 + ciphertext.len());
+    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&ciphertext);
+
+    crate::keystore::KeyStore::write_secure_file(path, &out)
+}
+
+/// Load an encrypted session map from disk.
+pub fn load_sessions_encrypted(
+    path: &Path,
+    encryption_key: &[u8; 32],
+) -> Result<HashMap<String, Session>, CoreError> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let data = std::fs::read(path).map_err(|e| CoreError::StorageError(e.to_string()))?;
+    if data.len() < 12 {
+        return Err(CoreError::StorageError(
+            "Session store file too short".into(),
+        ));
+    }
+    let (nonce, ciphertext) = data.split_at(12);
+    let mut nonce_arr = [0u8; 12];
+    nonce_arr.copy_from_slice(nonce);
+    let decrypted = xchat_crypto::aead::decrypt_aead(
+        encryption_key,
+        &nonce_arr,
+        ciphertext,
+        b"xchat-sessions-vault-v1",
+    )
+    .map_err(CoreError::Crypto)?;
+    let sessions: HashMap<String, Session> =
+        bincode::deserialize(&decrypted).map_err(|e| CoreError::StorageError(e.to_string()))?;
+    Ok(sessions)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,7 +259,7 @@ mod tests {
         .expect("Alice initiates session");
 
         // Bob receives and establishes session
-        let (mut bob_session, pt1) = Session::respond_inbound(&bob_keystore, &env1, now + 1)
+        let (mut bob_session, pt1) = Session::respond_inbound(&mut bob_keystore, &env1, now + 1)
             .expect("Bob establishes session");
         assert_eq!(pt1, b"Hello Bob from Alice!");
 
@@ -212,5 +281,26 @@ mod tests {
         // Replay of env2 must be rejected by Alice!
         let replay_err = alice_session.decrypt_message(&env2, now + 4);
         assert!(replay_err.is_err());
+    }
+
+    #[test]
+    fn test_session_serialization_encrypted_roundtrip() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let session_file = temp_dir.path().join("sessions.bin");
+        let key = [0x42u8; 32];
+
+        let alice_ks = KeyStore::generate();
+        let mut bob_ks = KeyStore::generate();
+        let bundle = bob_ks.export_bundle();
+        let (session, _) =
+            Session::initiate_outbound(&alice_ks, &bundle, b"init", [0x11; 16], 100, 3600).unwrap();
+
+        let mut map = HashMap::new();
+        map.insert("bob".to_string(), session);
+
+        save_sessions_encrypted(&map, &session_file, &key).expect("save sessions");
+        let loaded = load_sessions_encrypted(&session_file, &key).expect("load sessions");
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded.contains_key("bob"));
     }
 }

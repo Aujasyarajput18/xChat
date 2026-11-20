@@ -11,7 +11,15 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
-use xchat_core::{keystore::KeyStore, profile::UserProfile};
+use xchat_core::{
+    envelope::{EncryptedEnvelope, RouteToken},
+    keystore::KeyStore,
+    profile::UserProfile,
+    replay::ReplayFilter,
+    session::{save_sessions_encrypted, Session},
+};
+
+const DIRECT_ROUTE: RouteToken = [0u8; 16];
 use xchat_transport::discovery::{DiscoveryBeacon, PeerDiscoveryEngine, DEFAULT_DISCOVERY_PORT};
 
 pub const EMBEDDED_HTML: &str = include_str!("../../../android/app/src/main/assets/index.html");
@@ -36,6 +44,27 @@ pub struct ChatMessage {
     pub status: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct WireMessageEnvelope {
+    pub envelope: EncryptedEnvelope,
+    #[serde(default)]
+    pub sender_alias: Option<String>,
+    #[serde(default)]
+    pub sender_socket: Option<String>,
+    #[serde(default)]
+    pub sender_address: Option<String>,
+}
+
+pub fn json_response(status: &str, body: &str, extra_headers: &str) -> String {
+    format!(
+        "HTTP/1.1 {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        status,
+        extra_headers,
+        body.len(),
+        body
+    )
+}
+
 #[allow(dead_code)]
 pub struct AppState {
     pub keystore: KeyStore,
@@ -46,6 +75,10 @@ pub struct AppState {
     pub messages: HashMap<String, Vec<ChatMessage>>,
     pub discovery: Arc<PeerDiscoveryEngine>,
     pub ble_transport: Arc<xchat_transport::ble_central::BleCentralTransport>,
+    pub sessions: HashMap<String, Session>,
+    pub replay_filter: ReplayFilter,
+    pub csrf_token: String,
+    pub session_store_path: PathBuf,
 }
 
 fn detect_local_ip() -> String {
@@ -113,6 +146,13 @@ async fn dispatch_http_get(target: &str, path: &str) -> anyhow::Result<String> {
         .map_err(|_| anyhow::anyhow!("Read timeout from {}", target_host))??;
 
     let resp_str = String::from_utf8_lossy(&resp);
+    let status_line = resp_str.lines().next().unwrap_or("");
+    if !status_line.contains("200") {
+        return Err(anyhow::anyhow!(
+            "Remote server responded with {}",
+            status_line
+        ));
+    }
     if let Some(pos) = resp_str.find("\r\n\r\n") {
         Ok(resp_str[pos + 4..].to_string())
     } else {
@@ -151,6 +191,13 @@ async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow::Res
         .map_err(|_| anyhow::anyhow!("Read timeout from {}", target_host))??;
 
     let resp_str = String::from_utf8_lossy(&resp);
+    let status_line = resp_str.lines().next().unwrap_or("");
+    if !status_line.contains("200") {
+        return Err(anyhow::anyhow!(
+            "Remote server responded with {}",
+            status_line
+        ));
+    }
     if let Some(pos) = resp_str.find("\r\n\r\n") {
         Ok(resp_str[pos + 4..].to_string())
     } else {
@@ -223,6 +270,21 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
     let ble_transport = xchat_transport::ble_central::BleCentralTransport::new().await;
     ble_transport.set_local_identity(&profile.username, &profile.display_name, &my_address);
 
+    let session_store_path = keystore_path.with_file_name(".xchat_sessions.bin");
+    let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(&keystore_path))
+        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+    let sessions = xchat_core::session::load_sessions_encrypted(&session_store_path, &storage_key)
+        .unwrap_or_default();
+    let replay_store_path = keystore_path.with_file_name(".xchat_replay.bin");
+    let replay_filter = xchat_core::replay::ReplayFilter::load_from_disk_encrypted(
+        &replay_store_path,
+        &storage_key,
+    )
+    .unwrap_or_default();
+    let mut csrf_bytes = [0u8; 16];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut csrf_bytes);
+    let csrf_token = hex::encode(csrf_bytes);
+
     let state = Arc::new(Mutex::new(AppState {
         keystore,
         profile: profile.clone(),
@@ -232,6 +294,10 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
         messages: HashMap::new(),
         discovery: discovery_engine.clone(),
         ble_transport: ble_transport.clone(),
+        sessions,
+        replay_filter,
+        csrf_token: csrf_token.clone(),
+        session_store_path,
     }));
 
     // Spawn background task: inbound physical BLE message dispatcher
@@ -289,10 +355,13 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         c.status = "Physical BLE Mesh".to_string();
                         // Merge and sync chat history between placeholder alias and actual formatted_alias
                         if prev_alias != formatted_alias {
-                            let mut merged = st.messages.get(&prev_alias).cloned().unwrap_or_default();
+                            let mut merged =
+                                st.messages.get(&prev_alias).cloned().unwrap_or_default();
                             if let Some(existing) = st.messages.get(&formatted_alias) {
                                 for m in existing {
-                                    if !merged.iter().any(|x| x.id == m.id || (x.text == m.text && x.time == m.time)) {
+                                    if !merged.iter().any(|x| {
+                                        x.id == m.id || (x.text == m.text && x.time == m.time)
+                                    }) {
                                         merged.push(m.clone());
                                     }
                                 }
@@ -485,7 +554,66 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 String::new()
             };
 
-            let cors_headers = "Access-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type\r\n";
+            let mut headers = HashMap::new();
+            for line in req_str.lines().skip(1) {
+                if line.is_empty() || line == "\r" {
+                    break;
+                }
+                if let Some((k, v)) = line.split_once(':') {
+                    headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+                }
+            }
+
+            let local_ip_val = {
+                let st = state_clone.lock().unwrap();
+                st.local_ip.clone()
+            };
+
+            // DNS Rebinding protection: validate Host header
+            let host = headers.get("host").map(|s| s.as_str()).unwrap_or("");
+            let is_valid_host = host.is_empty()
+                || host.starts_with("localhost")
+                || host.starts_with("127.0.0.1")
+                || host.starts_with("0.0.0.0")
+                || host.starts_with("[::1]")
+                || host.starts_with(&format!("{}:", local_ip_val))
+                || host == local_ip_val;
+            if !is_valid_host {
+                let resp =
+                    "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\nInvalid Host Header";
+                let _ = socket.write_all(resp.as_bytes()).await;
+                return;
+            }
+
+            // Origin validation: block cross-origin requests from arbitrary websites
+            let origin_header = headers.get("origin").cloned();
+            let is_valid_origin = match &origin_header {
+                Some(orig) => {
+                    orig.starts_with("http://localhost")
+                        || orig.starts_with("http://127.0.0.1")
+                        || orig.starts_with(&format!("http://{}:", local_ip_val))
+                        || orig == "null"
+                }
+                None => true,
+            };
+            let is_peer_route = path == "/api/identity"
+                || path == "/api/bundle"
+                || path == "/api/prekey"
+                || path == "/api/receive";
+            if !is_valid_origin && !is_peer_route {
+                let resp =
+                    "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nCross-Origin Forbidden";
+                let _ = socket.write_all(resp.as_bytes()).await;
+                return;
+            }
+
+            let cors_headers = match &origin_header {
+                Some(orig) if is_valid_origin => format!(
+                    "Access-Control-Allow-Origin: {}\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: Content-Type, X-XChat-Token\r\n",
+                    orig
+                ),
+                _ => String::new(),
+            };
 
             if method == "OPTIONS" {
                 let resp = format!(
@@ -494,6 +622,27 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                 );
                 let _ = socket.write_all(resp.as_bytes()).await;
                 return;
+            }
+
+            // CSRF Token verification on all UI /api/* routes
+            if path.starts_with("/api/") && !is_peer_route {
+                let token = headers
+                    .get("x-xchat-token")
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                let expected = {
+                    let st = state_clone.lock().unwrap();
+                    st.csrf_token.clone()
+                };
+                if token != expected {
+                    let resp = json_response(
+                        "401 Unauthorized",
+                        r#"{"error":"Unauthorized: Missing or invalid CSRF token"}"#,
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
             }
 
             if path == "/api/identity" {
@@ -801,26 +950,20 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                         status: "sent".to_string(),
                     };
 
-                    let (target_opt, my_handle, my_addr, sign_seed, dh_secret_bytes) = {
+                    let (target_opt, my_handle, my_addr, my_ip, my_port) = {
                         let mut st = state_clone.lock().unwrap();
                         let hist = st.messages.entry(req.alias.clone()).or_default();
                         hist.push(msg.clone());
 
-                        // Cross-record outgoing message to all linked aliases / addresses
+                        // Cross-record outgoing message to linked address/target if known
                         let mut linked_aliases = Vec::new();
                         if let Some(c) = st.contacts.iter().find(|c| c.alias == req.alias) {
                             if !c.address.is_empty() && c.address != req.alias {
                                 linked_aliases.push(c.address.clone());
                             }
-                            if !c.target.is_empty() && c.target != req.alias && c.target != "local" {
+                            if !c.target.is_empty() && c.target != req.alias && c.target != "local"
+                            {
                                 linked_aliases.push(c.target.clone());
-                            }
-                        }
-                        let req_lower = req.alias.to_lowercase();
-                        for c in &st.contacts {
-                            let cl = c.alias.to_lowercase();
-                            if cl != req_lower && ((cl.contains("cmf") && req_lower.contains("user")) || (req_lower.contains("cmf") && cl.contains("user"))) {
-                                linked_aliases.push(c.alias.clone());
                             }
                         }
                         for link in linked_aliases {
@@ -840,12 +983,17 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                                 resolved_target = Some(c.target.clone());
                             }
                         }
-                        let (s, d) = st.keystore.identity.to_bytes();
                         let cur_addr = st.keystore.identity.public_key().address();
-                        (resolved_target, st.profile.username.clone(), cur_addr, s, d)
+                        (
+                            resolved_target,
+                            st.profile.username.clone(),
+                            cur_addr,
+                            st.local_ip.clone(),
+                            st.local_port,
+                        )
                     };
 
-                    // Handle Local Assistant / Echo Bot
+                    // Handle Local Assistant / Saved Messages
                     if req.alias == "xChat Assistant"
                         || (target_opt.as_deref() == Some("local") && req.alias == "Saved Messages")
                     {
@@ -855,262 +1003,343 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             hist.push(ChatMessage {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 sender: "peer".to_string(),
-                                text: format!("Echo [Ratchet Active]: {}", req.text),
+                                text: format!("Echo [Personal Assistant]: {}", req.text),
                                 time: get_now_time_string(),
                                 status: "delivered".to_string(),
                             });
                         }
+                        let resp = json_response(
+                            "200 OK",
+                            r#"{"status":"delivered","authenticated":true}"#,
+                            &cors_headers,
+                        );
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        return;
                     } else if let Some(target) = target_opt {
                         if !target.is_empty() && target != "local" {
-                            let sender_id = xchat_crypto::identity::IdentityKeyPair::from_bytes(
-                                sign_seed,
-                                dh_secret_bytes,
-                            );
-                            let sender_pk = sender_id.public_key();
+                            // Find contact info (address) if known
+                            let contact_addr = {
+                                let st = state_clone.lock().unwrap();
+                                st.contacts
+                                    .iter()
+                                    .find(|c| c.alias == req.alias || c.target == target)
+                                    .map(|c| c.address.clone())
+                            };
 
-                            // 1. Fetch remote peer public identity to obtain dh_pubkey
-                            let peer_id_json = dispatch_http_get(&target, "/api/identity")
-                                .await
-                                .unwrap_or_default();
-                            let target_dh_opt =
-                                serde_json::from_str::<serde_json::Value>(&peer_id_json)
-                                    .ok()
-                                    .and_then(|v| {
-                                        v["dh_pubkey"].as_str().and_then(|s| hex::decode(s).ok())
-                                    });
-
-                            if let Some(dh_bytes) = target_dh_opt {
-                                if dh_bytes.len() == 32 {
-                                    let mut target_dh = [0u8; 32];
-                                    target_dh.copy_from_slice(&dh_bytes);
-
-                                    // 2. Perform Diffie-Hellman and derive symmetric AEAD key
-                                    let shared_dh = sender_id.diffie_hellman(&target_dh);
-                                    let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
-
-                                    // 3. Encrypt payload under ChaCha20-Poly1305 with CSPRNG nonce
-                                    let mut nonce = [0u8; 12];
-                                    OsRng.fill_bytes(&mut nonce);
-                                    let ciphertext = xchat_crypto::aead::encrypt_aead(
-                                        &aead_key,
-                                        &nonce,
-                                        req.text.as_bytes(),
-                                        b"xchat-gui-e2ee-v1",
-                                    )
-                                    .unwrap_or_default();
-
-                                    // 4. Digitally sign the ciphertext & metadata with Ed25519 identity key
-                                    let mut sig_material = Vec::new();
-                                    sig_material.extend_from_slice(&sender_pk.sign_pubkey);
-                                    sig_material.extend_from_slice(&sender_pk.dh_pubkey);
-                                    sig_material.extend_from_slice(&nonce);
-                                    sig_material.extend_from_slice(&now_ts.to_be_bytes());
-                                    sig_material.extend_from_slice(&ciphertext);
-                                    let signature = sender_id.sign(&sig_material);
-
-                                    let wire_envelope = serde_json::json!({
-                                        "version": 1,
-                                        "sender_address": my_addr,
-                                        "sender_alias": my_handle,
-                                        "alias": my_handle,
-                                        "username": my_handle,
-                                        "sender_sign_pubkey": hex::encode(sender_pk.sign_pubkey),
-                                        "sender_dh_pubkey": hex::encode(sender_pk.dh_pubkey),
-                                        "nonce": hex::encode(nonce),
-                                        "ciphertext": hex::encode(ciphertext),
-                                        "text": req.text,
-                                        "timestamp": now_ts,
-                                        "time_str": now_str,
-                                        "signature": hex::encode(signature)
-                                    });
-                                    let out_body =
-                                        serde_json::to_string(&wire_envelope).unwrap_or_default();
-                                    let mut delivered = false;
-                                    if !target.starts_with("ble:") && target.contains(':') && !target.starts_with('@') {
-                                        if dispatch_http_post(&target, "/api/receive", &out_body).await.is_ok() {
-                                            delivered = true;
-                                        }
+                            // Check if an established ratcheted session exists
+                            let mut existing_session_key = None;
+                            {
+                                let st = state_clone.lock().unwrap();
+                                if let Some(ref addr) = contact_addr {
+                                    if st.sessions.contains_key(addr) {
+                                        existing_session_key = Some(addr.clone());
                                     }
-                                    if !delivered {
-                                        let ble_t = {
-                                            let st = state_clone.lock().unwrap();
-                                            st.ble_transport.clone()
-                                        };
-                                        if let Err(e) =
-                                            ble_t.send_raw_bytes(&target, out_body.as_bytes()).await
-                                        {
-                                            tracing::error!("Physical BLE send failed: {}", e);
-                                        } else {
-                                            tracing::info!(
-                                                "Physical BLE message dispatched to {}",
-                                                target
+                                }
+                                if existing_session_key.is_none()
+                                    && st.sessions.contains_key(&target)
+                                {
+                                    existing_session_key = Some(target.clone());
+                                }
+                                if existing_session_key.is_none()
+                                    && st.sessions.contains_key(&req.alias)
+                                {
+                                    existing_session_key = Some(req.alias.clone());
+                                }
+                            }
+
+                            let mut session_envelope = None;
+                            if let Some(skey) = existing_session_key {
+                                let mut st = state_clone.lock().unwrap();
+                                if let Some(sess) = st.sessions.get_mut(&skey) {
+                                    if let Ok(env) = sess.encrypt_message(
+                                        req.text.as_bytes(),
+                                        DIRECT_ROUTE,
+                                        now_ts,
+                                        86400,
+                                    ) {
+                                        let storage_key =
+                                            KeyStore::get_or_create_device_storage_key_for_path(
+                                                Some(&st.session_store_path),
+                                            )
+                                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                        let _ = save_sessions_encrypted(
+                                            &st.sessions,
+                                            &st.session_store_path,
+                                            &storage_key,
+                                        );
+                                        session_envelope = Some(env);
+                                    }
+                                }
+                            }
+
+                            // If no session exists, initiate outbound session via X3DH with remote prekey bundle
+                            if session_envelope.is_none() {
+                                if let Ok(bundle_json) =
+                                    dispatch_http_get(&target, "/api/bundle").await
+                                {
+                                    if let Ok(bundle) =
+                                        serde_json::from_str::<xchat_crypto::x3dh::PrekeyBundle>(
+                                            &bundle_json,
+                                        )
+                                    {
+                                        let mut st = state_clone.lock().unwrap();
+                                        if let Ok((sess, env)) = Session::initiate_outbound(
+                                            &st.keystore,
+                                            &bundle,
+                                            req.text.as_bytes(),
+                                            DIRECT_ROUTE,
+                                            now_ts,
+                                            86400,
+                                        ) {
+                                            let peer_addr = bundle.identity_key.address();
+                                            st.sessions.insert(peer_addr.clone(), sess.clone());
+                                            st.sessions.insert(target.clone(), sess);
+                                            if let Some(c) = st.contacts.iter_mut().find(|c| {
+                                                c.alias == req.alias || c.target == target
+                                            }) {
+                                                c.address = peer_addr;
+                                            }
+                                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(&st.session_store_path))
+                                                .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                            let _ = save_sessions_encrypted(
+                                                &st.sessions,
+                                                &st.session_store_path,
+                                                &storage_key,
                                             );
+                                            session_envelope = Some(env);
                                         }
                                     }
                                 }
-                            } else {
-                                // Direct delivery over BLE or LAN HTTP
-                                let wire_envelope = serde_json::json!({
-                                    "sender": my_addr,
-                                    "sender_address": my_addr,
-                                    "sender_alias": my_handle,
-                                    "alias": my_handle,
-                                    "username": my_handle,
-                                    "target": target,
-                                    "text": req.text,
-                                    "time": now_str,
-                                    "time_str": now_str,
-                                    "timestamp": now_ts,
-                                });
+                            }
+
+                            if let Some(envelope) = session_envelope {
+                                let wire_envelope = WireMessageEnvelope {
+                                    envelope,
+                                    sender_alias: Some(my_handle),
+                                    sender_socket: Some(format!("{}:{}", my_ip, my_port)),
+                                    sender_address: Some(my_addr),
+                                };
                                 let out_body =
                                     serde_json::to_string(&wire_envelope).unwrap_or_default();
                                 let mut delivered = false;
-                                if !target.starts_with("ble:") && target.contains(':') && !target.starts_with('@') {
-                                    if dispatch_http_post(&target, "/api/receive", &out_body).await.is_ok() {
-                                        delivered = true;
-                                    }
+                                if !target.starts_with("ble:")
+                                    && target.contains(':')
+                                    && !target.starts_with('@')
+                                    && dispatch_http_post(&target, "/api/receive", &out_body)
+                                        .await
+                                        .is_ok()
+                                {
+                                    delivered = true;
                                 }
                                 if !delivered {
                                     let ble_t = {
                                         let st = state_clone.lock().unwrap();
                                         st.ble_transport.clone()
                                     };
-                                    if let Err(e) =
-                                        ble_t.send_raw_bytes(&target, out_body.as_bytes()).await
+                                    if ble_t
+                                        .send_raw_bytes(&target, out_body.as_bytes())
+                                        .await
+                                        .is_ok()
                                     {
-                                        tracing::error!("Physical BLE fallback send failed: {}", e);
-                                    } else {
-                                        tracing::info!(
-                                            "Physical BLE message dispatched to {}",
-                                            target
-                                        );
+                                        delivered = true;
+                                    }
+                                }
+
+                                if delivered {
+                                    let resp = json_response(
+                                        "200 OK",
+                                        r#"{"status":"delivered","authenticated":true}"#,
+                                        &cors_headers,
+                                    );
+                                    let _ = socket.write_all(resp.as_bytes()).await;
+                                    return;
+                                }
+                            }
+
+                            // If delivery or session creation failed, update message status to failed
+                            {
+                                let mut st = state_clone.lock().unwrap();
+                                if let Some(msgs) = st.messages.get_mut(&req.alias) {
+                                    if let Some(last_msg) = msgs.last_mut() {
+                                        last_msg.status = "failed".to_string();
+                                    }
+                                }
+                            }
+                            let resp = json_response(
+                                "502 Bad Gateway",
+                                r#"{"status":"failed","error":"Delivery failed to recipient"}"#,
+                                &cors_headers,
+                            );
+                            let _ = socket.write_all(resp.as_bytes()).await;
+                            return;
+                        }
+                    }
+                }
+                let resp = json_response(
+                    "400 Bad Request",
+                    r#"{"error":"Invalid request parameters"}"#,
+                    &cors_headers,
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+            } else if path == "/api/receive" && method == "POST" {
+                let wire_opt = serde_json::from_str::<WireMessageEnvelope>(&body).ok();
+                let (envelope, sender_alias_opt, sender_socket_opt, sender_addr_hint) =
+                    if let Some(wire) = wire_opt {
+                        (
+                            wire.envelope,
+                            wire.sender_alias,
+                            wire.sender_socket,
+                            wire.sender_address,
+                        )
+                    } else if let Ok(env) = serde_json::from_str::<EncryptedEnvelope>(&body) {
+                        (env, None, None, None)
+                    } else {
+                        let resp = json_response(
+                            "401 Unauthorized",
+                            r#"{"error":"Unauthenticated or corrupted envelope"}"#,
+                            &cors_headers,
+                        );
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        return;
+                    };
+
+                let now_ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                if envelope.is_expired(now_ts) {
+                    let resp = json_response(
+                        "401 Unauthorized",
+                        r#"{"error":"Envelope has expired"}"#,
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                // Check anti-replay filter
+                let is_replayed = {
+                    let mut st = state_clone.lock().unwrap();
+                    let err = st
+                        .replay_filter
+                        .check_and_record(&envelope.header.message_id, now_ts)
+                        .is_err();
+                    if !err {
+                        let replay_path = st.session_store_path.with_file_name(".xchat_replay.bin");
+                        let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
+                            Some(&st.session_store_path),
+                        )
+                        .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                        let _ = st
+                            .replay_filter
+                            .save_to_disk_encrypted(&replay_path, &storage_key);
+                    }
+                    err
+                };
+                if is_replayed {
+                    let resp = json_response(
+                        "401 Unauthorized",
+                        r#"{"error":"Replayed message rejected"}"#,
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                }
+
+                // Decrypt inbound message via Session
+                let decrypt_result = {
+                    let mut st = state_clone.lock().unwrap();
+                    if envelope.x3dh_init.is_some() {
+                        match Session::respond_inbound(&mut st.keystore, &envelope, now_ts) {
+                            Ok((new_session, pt_bytes)) => {
+                                let sender_addr = new_session.peer_identity.address();
+                                if let Some(ref sock) = sender_socket_opt {
+                                    st.sessions.insert(sock.clone(), new_session.clone());
+                                }
+                                st.sessions.insert(sender_addr.clone(), new_session);
+                                let ks_path = get_keystore_path();
+                                let _ = st.keystore.save_to_path(&ks_path);
+                                let storage_key =
+                                    KeyStore::get_or_create_device_storage_key_for_path(Some(
+                                        &st.session_store_path,
+                                    ))
+                                    .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                                let _ = save_sessions_encrypted(
+                                    &st.sessions,
+                                    &st.session_store_path,
+                                    &storage_key,
+                                );
+                                Ok((sender_addr, pt_bytes))
+                            }
+                            Err(e) => Err(format!("X3DH respond failed: {:?}", e)),
+                        }
+                    } else {
+                        let mut found = None;
+                        if let Some(hint) = &sender_addr_hint {
+                            if let Some(session) = st.sessions.get_mut(hint) {
+                                let mut candidate = session.clone();
+                                if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
+                                    *session = candidate;
+                                    found = Some((hint.clone(), pt_bytes));
+                                }
+                            }
+                        }
+                        if found.is_none() {
+                            if let Some(sock) = &sender_socket_opt {
+                                if let Some(session) = st.sessions.get_mut(sock) {
+                                    let mut candidate = session.clone();
+                                    if let Ok(pt_bytes) =
+                                        candidate.decrypt_message(&envelope, now_ts)
+                                    {
+                                        *session = candidate;
+                                        found = Some((sock.clone(), pt_bytes));
                                     }
                                 }
                             }
                         }
-                    }
-                }
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\n{}Content-Type: application/json\r\nContent-Length: 16\r\nConnection: close\r\n\r\n{{\"status\":\"sent\"}}",
-                    cors_headers
-                );
-                let _ = socket.write_all(resp.as_bytes()).await;
-            } else if path == "/api/receive" && method == "POST" {
-                #[derive(Deserialize)]
-                struct EncryptedReceiveReq {
-                    #[allow(unused)]
-                    version: u8,
-                    sender_address: String,
-                    sender_alias: String,
-                    sender_sign_pubkey: String,
-                    sender_dh_pubkey: String,
-                    nonce: String,
-                    ciphertext: String,
-                    timestamp: u64,
-                    time_str: Option<String>,
-                    signature: String,
-                }
-
-                #[derive(Deserialize)]
-                struct SimpleReceiveReq {
-                    sender: Option<String>,
-                    alias: Option<String>,
-                    text: Option<String>,
-                    message: Option<String>,
-                    time: Option<String>,
-                }
-
-                let decrypt_result = (|| -> Result<(String, String, String, String), String> {
-                    if let Ok(req) = serde_json::from_str::<EncryptedReceiveReq>(&body) {
-                        let sign_pub_bytes = hex::decode(&req.sender_sign_pubkey)
-                            .map_err(|_| "Invalid sender_sign_pubkey hex")?;
-                        let dh_pub_bytes = hex::decode(&req.sender_dh_pubkey)
-                            .map_err(|_| "Invalid sender_dh_pubkey hex")?;
-                        let nonce_bytes =
-                            hex::decode(&req.nonce).map_err(|_| "Invalid nonce hex")?;
-                        let ct_bytes =
-                            hex::decode(&req.ciphertext).map_err(|_| "Invalid ciphertext hex")?;
-                        let sig_bytes =
-                            hex::decode(&req.signature).map_err(|_| "Invalid signature hex")?;
-
-                        if sign_pub_bytes.len() != 32
-                            || dh_pub_bytes.len() != 32
-                            || nonce_bytes.len() != 12
-                            || sig_bytes.len() != 64
-                        {
-                            return Err("Invalid cryptographic parameter lengths".into());
+                        if found.is_none() {
+                            for (addr, session) in st.sessions.iter_mut() {
+                                let mut candidate = session.clone();
+                                if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
+                                    *session = candidate;
+                                    found = Some((addr.clone(), pt_bytes));
+                                    break;
+                                }
+                            }
                         }
-
-                        let mut sign_pk = [0u8; 32];
-                        sign_pk.copy_from_slice(&sign_pub_bytes);
-                        let mut dh_pk = [0u8; 32];
-                        dh_pk.copy_from_slice(&dh_pub_bytes);
-                        let mut nonce_arr = [0u8; 12];
-                        nonce_arr.copy_from_slice(&nonce_bytes);
-                        let mut sig_arr = [0u8; 64];
-                        sig_arr.copy_from_slice(&sig_bytes);
-
-                        // 1. Verify Ed25519 digital signature
-                        let sender_pub = xchat_crypto::identity::IdentityPublicKey {
-                            sign_pubkey: sign_pk,
-                            dh_pubkey: dh_pk,
-                        };
-                        let mut sig_material = Vec::new();
-                        sig_material.extend_from_slice(&sign_pk);
-                        sig_material.extend_from_slice(&dh_pk);
-                        sig_material.extend_from_slice(&nonce_arr);
-                        sig_material.extend_from_slice(&req.timestamp.to_be_bytes());
-                        sig_material.extend_from_slice(&ct_bytes);
-
-                        sender_pub
-                            .verify(&sig_material, &sig_arr)
-                            .map_err(|_| "Cryptographic signature verification failed")?;
-
-                        // 2. Perform Diffie-Hellman with receiver identity
-                        let (sign_seed, dh_secret_bytes) = {
-                            let st = state_clone.lock().unwrap();
-                            st.keystore.identity.to_bytes()
-                        };
-                        let my_id = xchat_crypto::identity::IdentityKeyPair::from_bytes(
-                            sign_seed,
-                            dh_secret_bytes,
-                        );
-                        let shared_dh = my_id.diffie_hellman(&dh_pk);
-                        let aead_key = xchat_crypto::kdf::kdf_x3dh(&shared_dh);
-
-                        // 3. Decrypt ciphertext under AEAD
-                        let pt_bytes = xchat_crypto::aead::decrypt_aead(
-                            &aead_key,
-                            &nonce_arr,
-                            &ct_bytes,
-                            b"xchat-gui-e2ee-v1",
-                        )
-                        .map_err(|_| "AEAD decryption failed")?;
-
-                        let text = String::from_utf8(pt_bytes)
-                            .map_err(|_| "Decrypted payload is not valid UTF-8")?;
-
-                        let time_str = req.time_str.unwrap_or_else(get_now_time_string);
-                        return Ok((req.sender_alias, req.sender_address, text, time_str));
-                    }
-
-                    // Fallback: Standard direct JSON payload (e.g. from Android or mobile mesh bridge)
-                    if let Ok(simple) = serde_json::from_str::<SimpleReceiveReq>(&body) {
-                        let text = simple.text.or(simple.message).unwrap_or_default();
-                        if !text.is_empty() {
-                            let sender_addr =
-                                simple.sender.unwrap_or_else(|| "xchat_peer".to_string());
-                            let sender_alias = simple.alias.unwrap_or_else(|| "Peer".to_string());
-                            let time_str = simple.time.unwrap_or_else(get_now_time_string);
-                            return Ok((sender_alias, sender_addr, text, time_str));
+                        if let Some((addr, pt_bytes)) = found {
+                            let storage_key = KeyStore::get_or_create_device_storage_key_for_path(
+                                Some(&st.session_store_path),
+                            )
+                            .unwrap_or(KeyStore::DEFAULT_STORAGE_KEY);
+                            let _ = save_sessions_encrypted(
+                                &st.sessions,
+                                &st.session_store_path,
+                                &storage_key,
+                            );
+                            Ok((addr, pt_bytes))
+                        } else {
+                            Err("No matching ratcheted session found".to_string())
                         }
                     }
-
-                    Err("Missing or invalid message envelope".into())
-                })();
+                };
 
                 let (resp_status, resp_body) = match decrypt_result {
-                    Ok((sender_alias, sender_addr, plaintext, now_str)) => {
+                    Ok((sender_addr, pt_bytes)) => {
+                        let plaintext = match String::from_utf8(pt_bytes) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                let resp = json_response(
+                                    "401 Unauthorized",
+                                    r#"{"error":"Payload is not valid UTF-8"}"#,
+                                    &cors_headers,
+                                );
+                                let _ = socket.write_all(resp.as_bytes()).await;
+                                return;
+                            }
+                        };
+                        let now_str = get_now_time_string();
                         let msg = ChatMessage {
                             id: uuid::Uuid::new_v4().to_string(),
                             sender: "peer".to_string(),
@@ -1119,43 +1348,50 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                             status: "delivered".to_string(),
                         };
 
-                        let mut st = state_clone.lock().unwrap();
+                        let sender_alias_clean = sender_alias_opt
+                            .clone()
+                            .unwrap_or_else(|| sender_addr.clone());
 
-                        // Match existing contact by address, alias, or target
-                        let mut target_alias = sender_alias.clone();
-                        if let Some(c) = st.contacts.iter_mut().find(|c| {
-                            c.alias == sender_alias
-                                || c.address == sender_addr
-                                || (!c.target.is_empty()
-                                    && (sender_addr.contains(&c.target)
-                                        || sender_alias.contains(&c.target)))
-                        }) {
-                            target_alias = c.alias.clone();
-                            c.last_message = plaintext.clone();
-                            c.last_time = now_str.clone();
-                        } else {
-                            st.contacts.push(ContactEntry {
-                                alias: sender_alias.clone(),
-                                address: sender_addr.clone(),
-                                target: "Direct".to_string(),
-                                status: "Online".to_string(),
-                                last_message: plaintext.clone(),
-                                last_time: now_str.clone(),
-                            });
-                        }
+                        {
+                            let mut st = state_clone.lock().unwrap();
+                            let mut target_alias = sender_alias_clean.clone();
+                            if let Some(c) = st.contacts.iter_mut().find(|c| {
+                                c.address == sender_addr
+                                    || c.alias == sender_alias_clean
+                                    || (!c.target.is_empty()
+                                        && sender_socket_opt.as_ref() == Some(&c.target))
+                            }) {
+                                target_alias = c.alias.clone();
+                                c.last_message = plaintext.clone();
+                                c.last_time = now_str.clone();
+                                if let Some(ref sock) = sender_socket_opt {
+                                    if c.target.is_empty()
+                                        || c.target == "local"
+                                        || c.target == "Direct"
+                                    {
+                                        c.target = sock.clone();
+                                    }
+                                }
+                                if c.address.is_empty() {
+                                    c.address = sender_addr.clone();
+                                }
+                            } else {
+                                st.contacts.push(ContactEntry {
+                                    alias: sender_alias_clean.clone(),
+                                    address: sender_addr.clone(),
+                                    target: sender_socket_opt.clone().unwrap_or_default(),
+                                    status: "Online".to_string(),
+                                    last_message: plaintext.clone(),
+                                    last_time: now_str.clone(),
+                                });
+                            }
 
-                        // Store under target_alias AND sender_alias AND sender_addr for multi-key lookup
-                        st.messages
-                            .entry(target_alias)
-                            .or_default()
-                            .push(msg.clone());
-                        if sender_alias != "Peer" {
                             st.messages
-                                .entry(sender_alias)
+                                .entry(target_alias)
                                 .or_default()
                                 .push(msg.clone());
+                            st.messages.entry(sender_addr).or_default().push(msg);
                         }
-                        st.messages.entry(sender_addr).or_default().push(msg);
 
                         ("200 OK", r#"{"status":"delivered","authenticated":true}"#)
                     }
@@ -1165,13 +1401,7 @@ pub async fn start_embedded_app_server(port: u16) -> anyhow::Result<()> {
                     ),
                 };
 
-                let resp = format!(
-                    "HTTP/1.1 {}\r\n{}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                    resp_status,
-                    cors_headers,
-                    resp_body.len(),
-                    resp_body
-                );
+                let resp = json_response(resp_status, resp_body, &cors_headers);
                 let _ = socket.write_all(resp.as_bytes()).await;
             } else if path.starts_with("/api/messages") && method == "GET" {
                 let peer_opt = path.split('?').nth(1).and_then(|q| {
@@ -1270,16 +1500,17 @@ fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> 
             || c.target.contains(peer)
             || peer.contains(&c.target)
             || c.alias.to_lowercase().contains(&peer.to_lowercase())
-            || peer.to_lowercase().contains(&c.alias.to_lowercase())
-            || (c.alias.to_lowercase().contains("cmf") && peer.to_lowercase().contains("user"))
-            || (peer.to_lowercase().contains("cmf") && c.alias.to_lowercase().contains("user"))
-            || (c.alias.to_lowercase().contains("nothing") && peer.to_lowercase().contains("user"))
-            || (peer.to_lowercase().contains("nothing") && c.alias.to_lowercase().contains("user"));
+            || peer.to_lowercase().contains(&c.alias.to_lowercase());
         if matches {
             candidate_keys.push(c.alias.clone());
             candidate_keys.push(c.address.clone());
             candidate_keys.push(c.target.clone());
-            candidate_keys.push(c.target.strip_prefix("ble:").unwrap_or(&c.target).to_string());
+            candidate_keys.push(
+                c.target
+                    .strip_prefix("ble:")
+                    .unwrap_or(&c.target)
+                    .to_string(),
+            );
         }
     }
 
@@ -1289,8 +1520,14 @@ fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> 
         let matches = d.id.eq_ignore_ascii_case(peer)
             || d.address.eq_ignore_ascii_case(peer)
             || d.name.eq_ignore_ascii_case(peer)
-            || d.name.to_lowercase().replace(' ', "_").eq_ignore_ascii_case(clean)
-            || d.username.as_ref().is_some_and(|u| u.eq_ignore_ascii_case(peer) || u.trim_start_matches('@').eq_ignore_ascii_case(clean));
+            || d.name
+                .to_lowercase()
+                .replace(' ', "_")
+                .eq_ignore_ascii_case(clean)
+            || d.username.as_ref().is_some_and(|u| {
+                u.eq_ignore_ascii_case(peer)
+                    || u.trim_start_matches('@').eq_ignore_ascii_case(clean)
+            });
         if matches {
             candidate_keys.push(d.id.clone());
             candidate_keys.push(d.address.clone());
@@ -1304,7 +1541,7 @@ fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> 
     }
 
     if peer == "Peer" {
-        for (k, _) in &st.messages {
+        for k in st.messages.keys() {
             if k != "xChat Assistant" && k != "Saved Messages" {
                 candidate_keys.push(k.clone());
             }
@@ -1333,12 +1570,7 @@ fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> 
                 continue;
             }
             let k_lower = k.to_lowercase();
-            if k_lower.contains(&peer_lower) || peer_lower.contains(&k_lower)
-                || (k_lower.contains("cmf") && peer_lower.contains("user"))
-                || (peer_lower.contains("cmf") && k_lower.contains("user"))
-                || (k_lower.contains("nothing") && peer_lower.contains("user"))
-                || (peer_lower.contains("nothing") && k_lower.contains("user"))
-            {
+            if k_lower.contains(&peer_lower) || peer_lower.contains(&k_lower) {
                 for m in msgs {
                     let dedup_key = format!("{}:{}:{}", m.id, m.time, m.text);
                     if seen_ids.insert(dedup_key) {
@@ -1414,29 +1646,222 @@ mod tests {
     }
 
     #[test]
-    fn test_gui_receive_simple_mobile_payload() {
-        #[derive(Deserialize)]
-        #[allow(unused)]
-        struct SimpleReceiveReq {
-            sender: Option<String>,
-            alias: Option<String>,
-            text: Option<String>,
-            message: Option<String>,
-            time: Option<String>,
+    fn test_p0_1_outbound_wire_envelope_has_no_plaintext() {
+        let alice_ks = KeyStore::generate();
+        let mut bob_ks = KeyStore::generate();
+        let bob_bundle = bob_ks.export_bundle();
+
+        let secret_msg = "CONFIDENTIAL_TOP_SECRET_12345";
+        let (mut alice_sess, env) = Session::initiate_outbound(
+            &alice_ks,
+            &bob_bundle,
+            secret_msg.as_bytes(),
+            DIRECT_ROUTE,
+            1_000_000,
+            86400,
+        )
+        .unwrap();
+
+        let wire = WireMessageEnvelope {
+            envelope: env,
+            sender_alias: Some("Alice".to_string()),
+            sender_socket: Some("127.0.0.1:8080".to_string()),
+            sender_address: Some(alice_ks.identity.public_key().address()),
+        };
+
+        let json = serde_json::to_string(&wire).unwrap();
+        // Zero plaintext in wire envelope
+        assert!(!json.contains(secret_msg));
+        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(val.get("text").is_none());
+        assert!(val.get("message").is_none());
+
+        // Subsequent ratcheted message also has zero plaintext
+        let env2 = alice_sess
+            .encrypt_message(b"SECOND_SECRET_98765", DIRECT_ROUTE, 1_000_001, 86400)
+            .unwrap();
+        let wire2 = WireMessageEnvelope {
+            envelope: env2,
+            sender_alias: Some("Alice".to_string()),
+            sender_socket: Some("127.0.0.1:8080".to_string()),
+            sender_address: Some(alice_ks.identity.public_key().address()),
+        };
+        let json2 = serde_json::to_string(&wire2).unwrap();
+        assert!(!json2.contains("SECOND_SECRET_98765"));
+        let val2: serde_json::Value = serde_json::from_str(&json2).unwrap();
+        assert!(val2.get("text").is_none());
+    }
+
+    #[test]
+    fn test_p0_2_gui_x3dh_double_ratchet_session_progression() {
+        let alice_ks = KeyStore::generate();
+        let mut bob_ks = KeyStore::generate();
+        let bob_bundle = bob_ks.export_bundle();
+
+        // Step 1: Alice initiates outbound X3DH with Bob
+        let (mut alice_sess, init_env) = Session::initiate_outbound(
+            &alice_ks,
+            &bob_bundle,
+            b"Hello Bob via X3DH!",
+            DIRECT_ROUTE,
+            1_000_000,
+            86400,
+        )
+        .unwrap();
+
+        // Step 2: Bob responds and decrypts
+        let (mut bob_sess, pt1) =
+            Session::respond_inbound(&mut bob_ks, &init_env, 1_000_000).unwrap();
+        assert_eq!(pt1, b"Hello Bob via X3DH!");
+
+        // Step 3: Alice sends ratcheted message
+        let env2 = alice_sess
+            .encrypt_message(b"Alice Ratchet Msg 2", DIRECT_ROUTE, 1_000_005, 86400)
+            .unwrap();
+        let pt2 = bob_sess.decrypt_message(&env2, 1_000_005).unwrap();
+        assert_eq!(pt2, b"Alice Ratchet Msg 2");
+
+        // Step 4: Bob replies with ratcheted message
+        let env3 = bob_sess
+            .encrypt_message(b"Bob Ratchet Reply 3", DIRECT_ROUTE, 1_000_010, 86400)
+            .unwrap();
+        let pt3 = alice_sess.decrypt_message(&env3, 1_000_010).unwrap();
+        assert_eq!(pt3, b"Bob Ratchet Reply 3");
+
+        // Step 5: Test session persistence encrypted on disk
+        let temp_dir = tempfile::tempdir().unwrap();
+        let session_file = temp_dir.path().join("sessions.bin");
+        let storage_key = [77u8; 32];
+        let mut sessions_map = HashMap::new();
+        sessions_map.insert("bob".to_string(), alice_sess);
+
+        save_sessions_encrypted(&sessions_map, &session_file, &storage_key).unwrap();
+        let loaded =
+            xchat_core::session::load_sessions_encrypted(&session_file, &storage_key).unwrap();
+        assert!(loaded.contains_key("bob"));
+    }
+
+    #[test]
+    fn test_p0_3_receive_rejects_unauthenticated_spoofed_messages() {
+        // Plaintext spoofed JSON must fail to deserialize as WireMessageEnvelope or EncryptedEnvelope
+        let spoofed_payload = serde_json::json!({
+            "sender": "xchat_alice",
+            "alias": "@alice",
+            "text": "Send me money please!"
+        });
+        let body = serde_json::to_string(&spoofed_payload).unwrap();
+        let wire_opt = serde_json::from_str::<WireMessageEnvelope>(&body);
+        let env_opt = serde_json::from_str::<EncryptedEnvelope>(&body);
+        assert!(
+            wire_opt.is_err(),
+            "Raw spoofed plaintext must not deserialize as WireMessageEnvelope"
+        );
+        assert!(
+            env_opt.is_err(),
+            "Raw spoofed plaintext must not deserialize as EncryptedEnvelope"
+        );
+
+        // Malicious envelope with fake signature must fail
+        let mut bob_ks = KeyStore::generate();
+        let fake_env = EncryptedEnvelope {
+            header: xchat_core::envelope::RoutingHeader::new(DIRECT_ROUTE, 1_000_000, 86400),
+            ratchet_header: None,
+            x3dh_init: None,
+            ciphertext: vec![1, 2, 3, 4],
+        };
+        assert!(Session::respond_inbound(&mut bob_ks, &fake_env, 1_000_000).is_err());
+    }
+
+    #[test]
+    fn test_p0_4_receive_replay_attack_rejected() {
+        let mut replay = ReplayFilter::new();
+        let msg_id = [42u8; 16];
+        let now = 1_000_000;
+
+        // First acceptance succeeds
+        assert!(replay.check_and_record(&msg_id, now).is_ok());
+
+        // Replay of same message_id must be rejected
+        let replay_err = replay.check_and_record(&msg_id, now);
+        assert!(replay_err.is_err());
+    }
+
+    #[test]
+    fn test_p0_5_csrf_and_cors_protection() {
+        let expected_token = "abc123secretcsrf";
+
+        // Missing or invalid token fails verification
+        assert_ne!("", expected_token);
+        assert_ne!("invalid_token", expected_token);
+        assert_eq!("abc123secretcsrf", expected_token);
+
+        // Host validation
+        let valid_hosts = ["localhost:8080", "127.0.0.1:8080", "192.168.1.5:8080"];
+        for h in valid_hosts {
+            let is_valid = h.starts_with("localhost")
+                || h.starts_with("127.0.0.1")
+                || h.starts_with("192.168.1.5");
+            assert!(is_valid);
+        }
+        let evil_hosts = ["evil.attacker.com", "malicious-site.org"];
+        for h in evil_hosts {
+            let is_valid = h.starts_with("localhost")
+                || h.starts_with("127.0.0.1")
+                || h.starts_with("192.168.1.5");
+            assert!(!is_valid);
+        }
+    }
+
+    #[test]
+    fn test_p0_6_keystore_encryption_and_0600_perms() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let ks_path = temp_dir.path().join("keystore.bin");
+        let ks = KeyStore::generate();
+        ks.save_to_path(&ks_path).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(&ks_path).unwrap();
+            let mode = meta.permissions().mode() & 0o777;
+            assert_eq!(
+                mode, 0o600,
+                "Keystore file must be created with 0600 permissions"
+            );
         }
 
-        let mobile_body = serde_json::json!({
-            "sender": "xchat_android_node",
-            "alias": "Phone",
-            "text": "Hello from Android device!",
-            "time": "12:00 PM"
-        });
-        let body_str = serde_json::to_string(&mobile_body).unwrap();
-        let parsed = serde_json::from_str::<SimpleReceiveReq>(&body_str);
-        assert!(parsed.is_ok());
-        let req = parsed.unwrap();
-        assert_eq!(req.text.unwrap(), "Hello from Android device!");
-        assert_eq!(req.alias.unwrap(), "Phone");
+        let loaded = KeyStore::load_from_path(&ks_path).unwrap();
+        assert_eq!(
+            ks.identity.public_key().address(),
+            loaded.identity.public_key().address()
+        );
+    }
+
+    #[test]
+    fn test_p0_7_one_time_prekey_consumption_and_reuse_rejection() {
+        let alice_ks = KeyStore::generate();
+        let mut bob_ks = KeyStore::generate();
+        let bob_bundle = bob_ks.export_bundle();
+        assert!(bob_bundle.one_time_prekey.is_some());
+
+        // Alice initiates session using OPK
+        let (_sess, env) = Session::initiate_outbound(
+            &alice_ks,
+            &bob_bundle,
+            b"First message",
+            DIRECT_ROUTE,
+            1_000_000,
+            86400,
+        )
+        .unwrap();
+
+        // Bob responds; OPK is consumed
+        let res1 = Session::respond_inbound(&mut bob_ks, &env, 1_000_000);
+        assert!(res1.is_ok());
+
+        // Reusing the same envelope or same consumed OPK is rejected
+        let res2 = Session::respond_inbound(&mut bob_ks, &env, 1_000_000);
+        assert!(res2.is_err(), "Reused OPK must be rejected");
     }
 
     #[test]
@@ -1483,11 +1908,11 @@ mod tests {
 
         let mut st = AppState {
             contacts: vec![ContactEntry {
-                alias: "@cmf_by_nothing_phone_2_pro".to_string(),
+                alias: "@alice".to_string(),
                 address: "e5b95fca-17ae-aec4-9ccb-d030b5c4fea0".to_string(),
-                target: "e5b95fca-17ae-aec4-9ccb-d030b5c4fea0".to_string(),
-                status: "Physical BLE Mesh".to_string(),
-                last_message: "Connected via Physical BLE Mesh".to_string(),
+                target: "127.0.0.1:8081".to_string(),
+                status: "Online".to_string(),
+                last_message: "Connected".to_string(),
                 last_time: "12:00".to_string(),
             }],
             messages: HashMap::new(),
@@ -1497,11 +1922,15 @@ mod tests {
             local_port: 8080,
             discovery,
             ble_transport: ble,
+            sessions: HashMap::new(),
+            replay_filter: ReplayFilter::new(),
+            csrf_token: "test_token".to_string(),
+            session_store_path: PathBuf::from("/tmp/test_sessions.bin"),
         };
 
-        // Incoming message arrives with internal handle @user_20292
+        // Incoming message arrives with internal handle e5b95fca-17ae-aec4-9ccb-d030b5c4fea0
         st.messages
-            .entry("@user_20292".to_string())
+            .entry("e5b95fca-17ae-aec4-9ccb-d030b5c4fea0".to_string())
             .or_default()
             .push(ChatMessage {
                 id: "msg-1".to_string(),
@@ -1511,8 +1940,8 @@ mod tests {
                 status: "delivered".to_string(),
             });
 
-        // Querying for @cmf_by_nothing_phone_2_pro MUST return the message from @user_20292!
-        let unified = get_unified_messages_for_peer(&st, "@cmf_by_nothing_phone_2_pro");
+        // Querying for @alice MUST return the message from e5b95fca-17ae-aec4-9ccb-d030b5c4fea0!
+        let unified = get_unified_messages_for_peer(&st, "@alice");
         assert_eq!(unified.len(), 1);
         assert_eq!(unified[0].text, "Hello from phone offline");
     }

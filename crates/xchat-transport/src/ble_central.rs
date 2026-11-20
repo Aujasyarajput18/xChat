@@ -157,7 +157,7 @@ impl BleCentralTransport {
                     break;
                 }
                 loop_count += 1;
-                if loop_count % 6 == 0 {
+                if loop_count.is_multiple_of(6) {
                     // Re-assert start_scan every 15s in case adapter was powered off / slept
                     let _ = adapter.start_scan(ScanFilter::default()).await;
                 }
@@ -415,7 +415,9 @@ impl BleCentralTransport {
                                                 let sender_opt = json_val["sender"]
                                                     .as_str()
                                                     .or_else(|| json_val["address"].as_str())
-                                                    .or_else(|| json_val["sender_address"].as_str());
+                                                    .or_else(|| {
+                                                        json_val["sender_address"].as_str()
+                                                    });
                                                 let uname_opt = json_val["username"]
                                                     .as_str()
                                                     .or_else(|| json_val["sender_alias"].as_str())
@@ -436,7 +438,8 @@ impl BleCentralTransport {
                                                             format!("@{}", u)
                                                         };
                                                         peers.insert(fmt.clone(), cp.clone());
-                                                        peers.insert(fmt.to_lowercase(), cp.clone());
+                                                        peers
+                                                            .insert(fmt.to_lowercase(), cp.clone());
                                                     }
                                                 }
 
@@ -566,7 +569,9 @@ impl BleCentralTransport {
                     .filter_map(|(dev_id, dev)| {
                         let matches_uname = dev.username.as_ref().is_some_and(|u| {
                             u.eq_ignore_ascii_case(clean_id)
-                                || u.strip_prefix('@').unwrap_or(u).eq_ignore_ascii_case(clean_id)
+                                || u.strip_prefix('@')
+                                    .unwrap_or(u)
+                                    .eq_ignore_ascii_case(clean_id)
                         });
                         let matches_name = dev.name.eq_ignore_ascii_case(clean_id);
                         if matches_uname || matches_name {
@@ -597,7 +602,10 @@ impl BleCentralTransport {
                 } else {
                     format!("@{}", clean_id)
                 };
-                if let Some(p) = peers.get(&alt_id).or_else(|| peers.get(&clean_id.to_lowercase())) {
+                if let Some(p) = peers
+                    .get(&alt_id)
+                    .or_else(|| peers.get(&clean_id.to_lowercase()))
+                {
                     if p.peripheral.is_connected().await.unwrap_or(false) {
                         peer_opt = Some(p.clone());
                     }
@@ -652,7 +660,9 @@ impl BleCentralTransport {
                             || p.properties().await.ok().flatten().is_some_and(|props| {
                                 props.services.contains(&BLE_SERVICE_UUID)
                                     || props.local_name.as_ref().is_some_and(|n| {
-                                        n.contains("Nothing") || n.contains("Phone") || n.contains("xChat")
+                                        n.contains("Nothing")
+                                            || n.contains("Phone")
+                                            || n.contains("xChat")
                                     })
                             });
                         if is_match {
@@ -725,7 +735,8 @@ impl BleCentralTransport {
                 }
 
                 if !peer.peripheral.is_connected().await.unwrap_or(false) {
-                    let _ = tokio::time::timeout(Duration::from_secs(3), peer.peripheral.connect()).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(3), peer.peripheral.connect())
+                        .await;
                 }
 
                 if let Ok(Ok(_)) = tokio::time::timeout(
