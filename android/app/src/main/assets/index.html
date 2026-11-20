@@ -3857,7 +3857,7 @@ async function sendCurrentMessage() {
                 })
             });
             const data = await resp.json().catch(() => ({}));
-            if (!resp.ok || data.status === 'failed') {
+            if (!resp.ok || data.status === 'failed' || data.peers_reached === 0) {
                 const hist = chatHistories[activeContact.alias];
                 if (hist && hist.length > 0) {
                     hist[hist.length - 1].status = 'failed';

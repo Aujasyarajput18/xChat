@@ -306,8 +306,10 @@ Cargo produces both `target/release/xchat` and `xchat-cli`, matching the launche
 | CLI contacts | `~/.xchat_contacts.bin` |
 | GUI | TCP `8080` (`--port`) |
 | Daemon / relay | TCP `7000` (`--port`) |
-| Peer discovery | UDP `9444` |
+| Peer discovery | UDP `9444` (`SO_REUSEPORT` enabled on Unix for multiple local instances) |
 | BLE service UUID | `a495ff10-c5b1-4b44-b512-1370f02d74de` |
+
+> **Note on UDP Port Sharing**: Peer discovery binds UDP port 9444 with `SO_REUSEADDR` and `SO_REUSEPORT` on Unix/macOS/Linux. This allows multiple instances on the same host to share port 9444 for local discovery broadcast reception. If running on platforms without port reuse support, only the first instance binds 9444 while subsequent instances fall back to ephemeral ports.
 
 To start fresh, delete the three `~/.xchat_*` files.
 

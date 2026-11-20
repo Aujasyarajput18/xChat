@@ -1232,12 +1232,54 @@ pub async fn handle_http_connection<S>(
                         sender_address: Some(my_addr),
                     };
                     let out_body = serde_json::to_string(&wire).unwrap_or_default();
+                    let mut peers_reached = 0;
                     for p in active_peers {
-                        let _ = dispatch_http_post(&p.socket_addr, "/api/receive", &out_body).await;
+                        if dispatch_http_post(&p.socket_addr, "/api/receive", &out_body)
+                            .await
+                            .is_ok()
+                        {
+                            peers_reached += 1;
+                        }
+                    }
+                    if peers_reached == 0 {
+                        {
+                            let mut st = state_clone.lock().unwrap();
+                            if let Some(msgs) = st.messages.get_mut(&room_alias) {
+                                if let Some(last) = msgs.last_mut() {
+                                    last.status = "failed".to_string();
+                                }
+                            }
+                        }
+                        let resp = json_response(
+                            "200 OK",
+                            r#"{"status":"failed","peers_reached":0,"error":"No peers reached"}"#,
+                            &cors_headers,
+                        );
+                        let _ = socket.write_all(resp.as_bytes()).await;
+                        return;
                     }
                     let resp = json_response(
                         "200 OK",
-                        r#"{"status":"delivered","authenticated":true}"#,
+                        &format!(
+                            r#"{{"status":"delivered","authenticated":true,"peers_reached":{}}}"#,
+                            peers_reached
+                        ),
+                        &cors_headers,
+                    );
+                    let _ = socket.write_all(resp.as_bytes()).await;
+                    return;
+                } else {
+                    {
+                        let mut st = state_clone.lock().unwrap();
+                        if let Some(msgs) = st.messages.get_mut(&room_alias) {
+                            if let Some(last) = msgs.last_mut() {
+                                last.status = "failed".to_string();
+                            }
+                        }
+                    }
+                    let resp = json_response(
+                        "400 Bad Request",
+                        r#"{"status":"failed","peers_reached":0,"error":"Burner room not joined"}"#,
                         &cors_headers,
                     );
                     let _ = socket.write_all(resp.as_bytes()).await;
@@ -1460,12 +1502,28 @@ pub async fn handle_http_connection<S>(
                     }
                     let resp = json_response(
                         "502 Bad Gateway",
-                        r#"{"status":"failed","error":"Delivery failed to recipient"}"#,
+                        r#"{"status":"failed","peers_reached":0,"error":"Delivery failed to recipient"}"#,
                         &cors_headers,
                     );
                     let _ = socket.write_all(resp.as_bytes()).await;
                     return;
                 }
+                // If target was empty or missing for recipient
+                {
+                    let mut st = state_clone.lock().unwrap();
+                    if let Some(msgs) = st.messages.get_mut(&req.alias) {
+                        if let Some(last_msg) = msgs.last_mut() {
+                            last_msg.status = "failed".to_string();
+                        }
+                    }
+                }
+                let resp = json_response(
+                    "400 Bad Request",
+                    r#"{"status":"failed","peers_reached":0,"error":"No destination target or peers available"}"#,
+                    &cors_headers,
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                return;
             }
         }
         let resp = json_response(
@@ -3228,6 +3286,98 @@ mod tests {
             "Message must be 'self', not echoed as 'peer'"
         );
         assert_eq!(msgs[0].text, "hello room from A");
+    }
+
+    #[tokio::test]
+    async fn test_send_to_empty_room_or_peerless_node_reports_failed() {
+        let (state, _temp) = create_test_app_state().await;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
+
+        let csrf_token = {
+            let st = state.lock().unwrap();
+            st.csrf_token.clone()
+        };
+
+        // 1. Join room #emptyroom
+        let join_body = serde_json::json!({
+            "room": "emptyroom",
+            "pass": "secret"
+        })
+        .to_string();
+        let join_req = format!(
+            "POST /api/burner/join HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, join_body.len(), join_body
+        );
+        let join_resp = send_test_http_request(port, state.clone(), &join_req).await;
+        assert!(join_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // 2. Send to #emptyroom when active_peers is empty
+        let send_body = serde_json::json!({
+            "alias": "#emptyroom",
+            "target": "burner",
+            "text": "anyone here?"
+        })
+        .to_string();
+        let send_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, send_body.len(), send_body
+        );
+        let send_resp = send_test_http_request(port, state.clone(), &send_req).await;
+        assert!(send_resp.starts_with("HTTP/1.1 200 OK"));
+        let body = send_resp.split("\r\n\r\n").nth(1).unwrap_or("");
+        assert!(
+            body.contains(r#""status":"failed""#),
+            "Send to empty room must report failed status: {}",
+            body
+        );
+        assert!(
+            body.contains(r#""peers_reached":0"#),
+            "Peers reached must be 0: {}",
+            body
+        );
+        assert!(
+            !body.contains(r#""status":"delivered""#),
+            "Send to empty room must NEVER report delivered"
+        );
+
+        // 3. Verify message in st.messages is marked failed
+        {
+            let st = state.lock().unwrap();
+            let room_msgs = st.messages.get("#emptyroom").expect("Room messages exist");
+            assert_eq!(room_msgs.last().unwrap().status, "failed");
+        }
+
+        // 4. Send to contact with empty/unreachable target
+        let peerless_body = serde_json::json!({
+            "alias": "GhostPeer",
+            "target": "",
+            "text": "hello ghost"
+        })
+        .to_string();
+        let peerless_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, peerless_body.len(), peerless_body
+        );
+        let peerless_resp = send_test_http_request(port, state.clone(), &peerless_req).await;
+        assert!(!peerless_resp.contains(r#""status":"delivered""#));
+        assert!(peerless_resp.contains(r#""status":"failed""#));
+        {
+            let st = state.lock().unwrap();
+            let ghost_msgs = st.messages.get("GhostPeer").expect("Ghost messages exist");
+            assert_eq!(ghost_msgs.last().unwrap().status, "failed");
+        }
     }
 
     #[test]

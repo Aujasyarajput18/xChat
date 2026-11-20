@@ -77,10 +77,27 @@ pub struct PeerDiscoveryEngine {
 
 impl PeerDiscoveryEngine {
     /// Bind discovery listener on the local port (e.g. 9444 or OS ephemeral for testing).
+    /// Enables SO_REUSEADDR and SO_REUSEPORT (on Unix) to permit multiple local instances
+    /// on the same machine to co-bind the discovery port without address collisions.
     pub async fn bind(listen_port: u16, broadcast_port: u16) -> Result<Arc<Self>, TransportError> {
-        let bind_addr = format!("0.0.0.0:{}", listen_port);
-        let socket = UdpSocket::bind(&bind_addr).await?;
-        let _ = socket.set_broadcast(true);
+        let bind_addr: std::net::SocketAddr = format!("0.0.0.0:{}", listen_port)
+            .parse()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+        let sock = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::DGRAM,
+            Some(socket2::Protocol::UDP),
+        )?;
+        let _ = sock.set_reuse_address(true);
+        #[cfg(all(unix, not(target_os = "solaris"), not(target_os = "illumos")))]
+        let _ = sock.set_reuse_port(true);
+        let _ = sock.set_broadcast(true);
+        let _ = sock.set_nonblocking(true);
+        sock.bind(&bind_addr.into())?;
+
+        let std_socket: std::net::UdpSocket = sock.into();
+        let socket = UdpSocket::from_std(std_socket)?;
 
         let discovered_peers = Arc::new(Mutex::new(HashMap::new()));
         let is_running = Arc::new(std::sync::atomic::AtomicBool::new(true));
