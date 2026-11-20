@@ -1553,9 +1553,6 @@ pub async fn handle_http_connection<S>(
                 match Session::respond_inbound(&mut st.keystore, &envelope, now_ts) {
                     Ok((new_session, pt_bytes)) => {
                         let sender_addr = new_session.peer_identity.address();
-                        if let Some(ref sock) = sender_socket_opt {
-                            st.sessions.insert(sock.clone(), new_session.clone());
-                        }
                         st.sessions.insert(sender_addr.clone(), new_session);
                         let ks_path = get_keystore_path();
                         let _ = st.keystore.save_to_path(&ks_path);
@@ -1580,17 +1577,6 @@ pub async fn handle_http_connection<S>(
                         if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
                             *session = candidate;
                             found = Some((hint.clone(), pt_bytes));
-                        }
-                    }
-                }
-                if found.is_none() {
-                    if let Some(sock) = &sender_socket_opt {
-                        if let Some(session) = st.sessions.get_mut(sock) {
-                            let mut candidate = session.clone();
-                            if let Ok(pt_bytes) = candidate.decrypt_message(&envelope, now_ts) {
-                                *session = candidate;
-                                found = Some((sock.clone(), pt_bytes));
-                            }
                         }
                     }
                 }
@@ -1647,7 +1633,6 @@ pub async fn handle_http_connection<S>(
 
                 {
                     let mut st = state_clone.lock().unwrap();
-                    let mut target_alias = sender_alias_clean.clone();
                     let effective_target = sender_socket_opt.clone().unwrap_or_else(|| {
                         st.discovery
                             .get_active_peers()
@@ -1657,14 +1642,11 @@ pub async fn handle_http_connection<S>(
                             .unwrap_or_default()
                     });
 
-                    if let Some(c) = st.contacts.iter_mut().find(|c| {
-                        c.address == sender_addr
-                            || c.alias == sender_alias_clean
-                            || (!c.target.is_empty()
-                                && !effective_target.is_empty()
-                                && effective_target == c.target)
-                    }) {
-                        target_alias = c.alias.clone();
+                    // Identify sender ONLY by the cryptographically derived address.
+                    // sender_alias is only a display hint for brand-new contacts, and cannot collide with existing contacts.
+                    let target_alias = if let Some(c) =
+                        st.contacts.iter_mut().find(|c| c.address == sender_addr)
+                    {
                         c.last_message = plaintext.clone();
                         c.last_time = now_str.clone();
                         if !effective_target.is_empty()
@@ -1672,19 +1654,31 @@ pub async fn handle_http_connection<S>(
                         {
                             c.target = effective_target.clone();
                         }
-                        if c.address.is_empty() {
-                            c.address = sender_addr.clone();
-                        }
+                        c.alias.clone()
                     } else {
+                        let chosen_alias = if st
+                            .contacts
+                            .iter()
+                            .any(|c| c.alias.eq_ignore_ascii_case(&sender_alias_clean))
+                        {
+                            format!(
+                                "{} ({})",
+                                sender_alias_clean,
+                                &sender_addr[..8.min(sender_addr.len())]
+                            )
+                        } else {
+                            sender_alias_clean.clone()
+                        };
                         st.contacts.push(ContactEntry {
-                            alias: sender_alias_clean.clone(),
+                            alias: chosen_alias.clone(),
                             address: sender_addr.clone(),
                             target: effective_target,
                             status: "Online".to_string(),
                             last_message: plaintext.clone(),
                             last_time: now_str.clone(),
                         });
-                    }
+                        chosen_alias
+                    };
 
                     st.messages
                         .entry(target_alias)
@@ -2129,6 +2123,100 @@ mod tests {
             resp_with_token_str.contains("Saved Messages")
                 || resp_with_token_str.contains("Personal Assistant")
         );
+    }
+
+    #[tokio::test]
+    async fn test_sender_impersonation_relabel_attack_prevented() {
+        let (state, _temp) = create_test_app_state().await;
+        let bob_bundle = {
+            let mut st = state.lock().unwrap();
+            st.keystore.export_bundle()
+        };
+
+        let alice_ks = KeyStore::generate();
+        let alice_addr = alice_ks.identity.public_key().address();
+        let carol_ks = KeyStore::generate();
+        let carol_addr = carol_ks.identity.public_key().address();
+
+        // Bob has Alice in his contact list
+        {
+            let mut st = state.lock().unwrap();
+            st.contacts.push(ContactEntry {
+                alias: "Alice".to_string(),
+                address: alice_addr.clone(),
+                target: "192.168.1.100:8080".to_string(),
+                status: "Online".to_string(),
+                last_message: "".to_string(),
+                last_time: "".to_string(),
+            });
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        // Carol creates legitimate encrypted outbound message to Bob
+        let (_carol_sess, carol_env) = Session::initiate_outbound(
+            &carol_ks,
+            &bob_bundle,
+            b"I am really Carol",
+            DIRECT_ROUTE,
+            now,
+            86400,
+        )
+        .unwrap();
+
+        // Attacker relabels envelope to forge Alice's alias, socket, and claimed address
+        let forged_wire = WireMessageEnvelope {
+            envelope: carol_env,
+            sender_alias: Some("Alice".to_string()),
+            sender_socket: Some("192.168.1.100:8080".to_string()),
+            sender_address: Some(alice_addr.clone()),
+        };
+        let body = serde_json::to_string(&forged_wire).unwrap();
+
+        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
+        let port = listener_opt
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(8080);
+        if let Some(listener) = listener_opt {
+            let state_srv = state.clone();
+            tokio::spawn(run_server_loop(
+                listener,
+                state_srv,
+                "127.0.0.1".to_string(),
+            ));
+        }
+
+        let req = format!(
+            "POST /api/receive HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port,
+            body.len(),
+            body
+        );
+        let resp_str = send_test_http_request(port, state.clone(), &req).await;
+        assert!(
+            resp_str.starts_with("HTTP/1.1 200 OK"),
+            "Got response: {}",
+            resp_str
+        );
+
+        let st = state.lock().unwrap();
+        let alice_msgs = st.messages.get("Alice");
+        assert!(
+            alice_msgs.is_none() || alice_msgs.unwrap().is_empty(),
+            "Message must NOT appear in Alice's chat despite forged sender_alias and socket!"
+        );
+
+        let carol_msgs = st
+            .messages
+            .get(&carol_addr)
+            .expect("Carol's message must exist under her cryptographic address");
+        assert_eq!(carol_msgs.len(), 1);
+        assert_eq!(carol_msgs[0].text, "I am really Carol");
     }
 
     #[tokio::test]
