@@ -2604,30 +2604,85 @@ mod tests {
         assert!(replay_err.is_err());
     }
 
-    #[test]
-    fn test_p0_5_csrf_and_cors_protection() {
-        let expected_token = "abc123secretcsrf";
-
-        // Missing or invalid token fails verification
-        assert_ne!("", expected_token);
-        assert_ne!("invalid_token", expected_token);
-        assert_eq!("abc123secretcsrf", expected_token);
-
-        // Host validation
-        let valid_hosts = ["localhost:8080", "127.0.0.1:8080", "192.168.1.5:8080"];
-        for h in valid_hosts {
-            let is_valid = h.starts_with("localhost")
-                || h.starts_with("127.0.0.1")
-                || h.starts_with("192.168.1.5");
-            assert!(is_valid);
+    #[tokio::test]
+    async fn test_p0_5_csrf_and_cors_protection() {
+        let (state, _temp) = create_test_app_state().await;
+        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
+        let port = listener_opt
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(8080);
+        if let Some(listener) = listener_opt {
+            let state_srv = state.clone();
+            tokio::spawn(run_server_loop(
+                listener,
+                state_srv,
+                "127.0.0.1".to_string(),
+            ));
         }
-        let evil_hosts = ["evil.attacker.com", "malicious-site.org"];
-        for h in evil_hosts {
-            let is_valid = h.starts_with("localhost")
-                || h.starts_with("127.0.0.1")
-                || h.starts_with("192.168.1.5");
-            assert!(!is_valid);
-        }
+
+        let csrf_token = state.lock().unwrap().csrf_token.clone();
+
+        // 1. Missing CSRF token on UI API route -> 401 Unauthorized
+        let req_no_token = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        );
+        let resp_no_token = send_test_http_request(port, state.clone(), &req_no_token).await;
+        assert!(resp_no_token.starts_with("HTTP/1.1 401 Unauthorized"));
+
+        // 2. Invalid CSRF token -> 401 Unauthorized
+        let req_bad_token = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: invalid_csrf_token\r\nConnection: close\r\n\r\n",
+            port
+        );
+        let resp_bad_token = send_test_http_request(port, state.clone(), &req_bad_token).await;
+        assert!(resp_bad_token.starts_with("HTTP/1.1 401 Unauthorized"));
+
+        // 3. Valid CSRF token -> 200 OK
+        let req_valid = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let resp_valid = send_test_http_request(port, state.clone(), &req_valid).await;
+        assert!(resp_valid.starts_with("HTTP/1.1 200 OK"));
+
+        // 4. Malicious Origin header -> 403 Forbidden
+        let req_evil_origin = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://evil.attacker.com\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let resp_evil = send_test_http_request(port, state.clone(), &req_evil_origin).await;
+        assert!(resp_evil.starts_with("HTTP/1.1 403 Forbidden"));
+
+        // 5. Origin: null -> 403 Forbidden
+        let req_null_origin = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: null\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let resp_null = send_test_http_request(port, state.clone(), &req_null_origin).await;
+        assert!(resp_null.starts_with("HTTP/1.1 403 Forbidden"));
+
+        // 6. Valid Origin header -> 200 OK with Access-Control-Allow-Origin
+        let req_valid_origin = format!(
+            "GET /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nOrigin: http://localhost:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, port, csrf_token
+        );
+        let resp_valid_cors = send_test_http_request(port, state.clone(), &req_valid_origin).await;
+        assert!(resp_valid_cors.starts_with("HTTP/1.1 200 OK"));
+        assert!(resp_valid_cors.contains(&format!(
+            "Access-Control-Allow-Origin: http://localhost:{}",
+            port
+        )));
+
+        // 7. Public peer route allows unauthenticated GET without token
+        let req_peer_route = format!(
+            "GET /api/identity HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        );
+        let resp_peer = send_test_http_request(port, state.clone(), &req_peer_route).await;
+        assert!(resp_peer.starts_with("HTTP/1.1 200 OK"));
     }
 
     #[test]
@@ -2767,13 +2822,45 @@ mod tests {
         assert_eq!(unified[0].text, "Hello from phone offline");
     }
 
-    #[test]
-    fn test_p1_1_non_loopback_binding_config() {
-        // Validate that bind address defaults to 0.0.0.0 and allows arbitrary valid interfaces
-        let default_bind = "0.0.0.0";
-        assert_eq!(format!("{}:8080", default_bind), "0.0.0.0:8080");
-        let lan_bind = "192.168.1.100";
-        assert_eq!(format!("{}:8080", lan_bind), "192.168.1.100:8080");
+    #[tokio::test]
+    async fn test_p1_1_non_loopback_binding_config() {
+        let (state, _temp) = create_test_app_state().await;
+        let listener_opt = TcpListener::bind("0.0.0.0:0").await.ok();
+        let port = listener_opt
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(8080);
+
+        if let Some(listener) = listener_opt {
+            let state_srv = state.clone();
+            tokio::spawn(run_server_loop(listener, state_srv, "0.0.0.0".to_string()));
+        }
+
+        // Test real HTTP request to 127.0.0.1 against the 0.0.0.0 listener
+        let req = format!(
+            "GET /api/identity HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        );
+        let resp = send_test_http_request(port, state.clone(), &req).await;
+        assert!(
+            resp.starts_with("HTTP/1.1 200 OK"),
+            "Server bound on 0.0.0.0 must accept loopback connections: {}",
+            resp
+        );
+        assert!(resp.contains(r#""address":"#));
+
+        // Test bundle endpoint on the 0.0.0.0 listener
+        let bundle_req = format!(
+            "GET /api/bundle HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            port
+        );
+        let bundle_resp = send_test_http_request(port, state.clone(), &bundle_req).await;
+        assert!(
+            bundle_resp.starts_with("HTTP/1.1 200 OK"),
+            "Server must serve bundle on 0.0.0.0 listener: {}",
+            bundle_resp
+        );
     }
 
     #[test]
@@ -2827,8 +2914,9 @@ mod tests {
         assert_eq!(entry.target, "192.168.1.200:8080");
     }
 
-    #[test]
-    fn test_p1_4_real_ping_and_sos_reporting() {
+    #[tokio::test]
+    async fn test_p1_4_real_ping_and_sos_reporting() {
+        // 1. SOS Beacon creation and cryptographic signature verification
         let ks = KeyStore::generate();
         let now = 1_000_000u64;
         let beacon_res = xchat_core::sos::create_emergency_beacon(
@@ -2843,9 +2931,54 @@ mod tests {
         let beacon = beacon_res.unwrap();
         assert_eq!(beacon.header.expires_at - beacon.header.created_at, 7200);
 
-        // Ping invalid host should return an error
-        let bad_host = "127.0.0.1:1";
-        assert!(bad_host.contains(':'));
+        // 2. Start server on ephemeral port and test real HTTP /api/ping
+        let (state, _temp) = create_test_app_state().await;
+        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
+        let port = listener_opt
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(8080);
+        if let Some(listener) = listener_opt {
+            let state_srv = state.clone();
+            tokio::spawn(run_server_loop(
+                listener,
+                state_srv,
+                "127.0.0.1".to_string(),
+            ));
+        }
+
+        let csrf_token = state.lock().unwrap().csrf_token.clone();
+
+        // Real HTTP POST /api/ping to local target -> 200 OK with pong and latency
+        let ping_local = r#"{"target":"local"}"#;
+        let ping_local_req = format!(
+            "POST /api/ping HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, ping_local.len(), ping_local
+        );
+        let resp_local = send_test_http_request(port, state.clone(), &ping_local_req).await;
+        assert!(resp_local.starts_with("HTTP/1.1 200 OK"));
+        assert!(resp_local.contains(r#""status":"pong""#));
+
+        // Real HTTP POST /api/ping to unreachable host -> 504 Gateway Timeout with failed status
+        let ping_bad = r#"{"target":"127.0.0.1:1"}"#;
+        let ping_bad_req = format!(
+            "POST /api/ping HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, ping_bad.len(), ping_bad
+        );
+        let resp_bad = send_test_http_request(port, state.clone(), &ping_bad_req).await;
+        assert!(resp_bad.starts_with("HTTP/1.1 504 Gateway Timeout"));
+        assert!(resp_bad.contains(r#""status":"failed""#));
+
+        // Real HTTP POST /api/sos -> 200 OK with broadcasted reporting
+        let sos_body = r#"{"lat":37.7749,"lon":-122.4194,"message":"Emergency Mayday"}"#;
+        let sos_req = format!(
+            "POST /api/sos HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, sos_body.len(), sos_body
+        );
+        let resp_sos = send_test_http_request(port, state.clone(), &sos_req).await;
+        assert!(resp_sos.starts_with("HTTP/1.1 200 OK"));
+        assert!(resp_sos.contains(r#""status":"broadcasted""#));
     }
 
     #[test]
