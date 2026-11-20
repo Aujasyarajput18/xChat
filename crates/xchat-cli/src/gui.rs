@@ -458,6 +458,7 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                 // Handle handshake identity notification
                 if data["type"].as_str() == Some("handshake") {
                     let mut st = state_ble_inbound.lock().unwrap();
+                    let mut old_addr_opt = None;
                     if let Some(c) = st.contacts.iter_mut().find(|c| {
                         (!sender_addr.is_empty()
                             && (c.address == sender_addr
@@ -466,7 +467,8 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                     }) {
                         let prev_alias = c.alias.clone();
                         c.alias = formatted_alias.clone();
-                        if !sender_addr.is_empty() {
+                        if !sender_addr.is_empty() && c.address != sender_addr {
+                            old_addr_opt = Some(c.address.clone());
                             c.address = sender_addr.clone();
                         }
                         c.status = "Physical BLE Mesh".to_string();
@@ -495,6 +497,9 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                             last_message: "Connected via Physical BLE Mesh".to_string(),
                             last_time: get_now_time_string(),
                         });
+                    }
+                    if let Some(old_addr) = old_addr_opt {
+                        migrate_contact_messages(&mut st.messages, &old_addr, &sender_addr);
                     }
                     continue;
                 }
@@ -544,8 +549,13 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
                         st.contacts[idx].last_message = text;
                         st.contacts[idx].last_time = time_str;
                         st.contacts[idx].status = "Physical BLE Mesh".to_string();
-                        if !sender_addr.is_empty() {
+                        let mut old_addr_opt = None;
+                        if !sender_addr.is_empty() && st.contacts[idx].address != sender_addr {
+                            old_addr_opt = Some(st.contacts[idx].address.clone());
                             st.contacts[idx].address = sender_addr.clone();
+                        }
+                        if let Some(old_addr) = old_addr_opt {
+                            migrate_contact_messages(&mut st.messages, &old_addr, &sender_addr);
                         }
                     } else {
                         st.contacts.push(ContactEntry {
@@ -1076,11 +1086,29 @@ pub async fn handle_http_connection<S>(
         }
         if let Ok(req) = serde_json::from_str::<AddContactReq>(&body) {
             let target_str = req.target.unwrap_or_default();
+            let mut resolved_addr = req.address;
+            if (resolved_addr.is_none() || resolved_addr.as_deref() == Some(""))
+                && !target_str.is_empty()
+                && target_str != "local"
+                && !target_str.starts_with("ble:")
+                && target_str.contains(':')
+            {
+                if let Ok(ident_json) = dispatch_http_get(&target_str, "/api/identity").await {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ident_json) {
+                        if let Some(a) = v.get("address").and_then(|a| a.as_str()) {
+                            if !a.is_empty() {
+                                resolved_addr = Some(a.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+
             let mut st = state_clone.lock().unwrap();
 
             // Match existing contact by cryptographic address first, then target socket, then alias
             let mut existing_opt = None;
-            if let Some(ref req_addr) = req.address {
+            if let Some(ref req_addr) = resolved_addr {
                 if !req_addr.is_empty() && req_addr != "local" {
                     existing_opt = st.contacts.iter_mut().find(|c| c.address == *req_addr);
                 }
@@ -1095,17 +1123,21 @@ pub async fn handle_http_connection<S>(
                     .find(|c| c.alias.eq_ignore_ascii_case(&req.alias));
             }
 
+            let mut messages_migrated = false;
             if let Some(existing) = existing_opt {
                 if !target_str.is_empty() {
                     existing.target = target_str;
                 }
-                if let Some(ref addr) = req.address {
-                    if !addr.is_empty() && existing.address.is_empty() {
+                if let Some(ref addr) = resolved_addr {
+                    if !addr.is_empty() && existing.address != *addr {
+                        let old_addr = existing.address.clone();
                         existing.address = addr.clone();
+                        migrate_contact_messages(&mut st.messages, &old_addr, addr);
+                        messages_migrated = true;
                     }
                 }
             } else {
-                let addr = req.address.unwrap_or_else(|| {
+                let addr = resolved_addr.unwrap_or_else(|| {
                     format!(
                         "xchat_{}",
                         hex::encode(&uuid::Uuid::new_v4().as_bytes()[..4])
@@ -1126,6 +1158,10 @@ pub async fn handle_http_connection<S>(
                     "Failed to obtain device storage key; refusing fallback to insecure default",
                 );
             let _ = save_contacts_encrypted(&st.contacts, &st.contacts_store_path, &storage_key);
+            if messages_migrated {
+                let _ =
+                    save_messages_encrypted(&st.messages, &st.messages_store_path, &storage_key);
+            }
         }
         let resp = json_response("200 OK", r#"{"status":"added"}"#, &cors_headers);
         let _ = socket.write_all(resp.as_bytes()).await;
@@ -1142,6 +1178,83 @@ pub async fn handle_http_connection<S>(
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
+
+            // Check if contact has a reachable target and needs identity resolution (placeholder address or empty)
+            let mut pre_target = req.target.clone();
+            let mut pre_addr = None;
+            {
+                let st = state_clone.lock().unwrap();
+                if let Some(c) = st
+                    .contacts
+                    .iter()
+                    .find(|c| c.alias == req.alias || c.address == req.alias)
+                {
+                    if (pre_target.is_none()
+                        || pre_target.as_deref() == Some("")
+                        || pre_target.as_deref() == Some("local"))
+                        && !c.target.is_empty()
+                        && c.target != "local"
+                    {
+                        pre_target = Some(c.target.clone());
+                    }
+                    pre_addr = Some(c.address.clone());
+                }
+            }
+
+            if let Some(ref tgt) = pre_target {
+                if !tgt.is_empty()
+                    && tgt != "local"
+                    && tgt != "burner"
+                    && !tgt.starts_with('#')
+                    && !tgt.starts_with("ble:")
+                    && tgt.contains(':')
+                    && (pre_addr.is_none()
+                        || pre_addr.as_deref().unwrap_or("").starts_with("xchat_"))
+                {
+                    if let Ok(ident_json) = dispatch_http_get(tgt, "/api/identity").await {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&ident_json) {
+                            if let Some(real_addr) = v.get("address").and_then(|a| a.as_str()) {
+                                if !real_addr.is_empty() {
+                                    let mut st = state_clone.lock().unwrap();
+                                    let mut old_addr_opt = None;
+                                    if let Some(c) = st.contacts.iter_mut().find(|c| {
+                                        c.alias == req.alias
+                                            || c.target == *tgt
+                                            || c.address == req.alias
+                                    }) {
+                                        if c.address != real_addr {
+                                            old_addr_opt = Some(c.address.clone());
+                                            c.address = real_addr.to_string();
+                                        }
+                                    }
+                                    if let Some(old_addr) = old_addr_opt {
+                                        migrate_contact_messages(
+                                            &mut st.messages,
+                                            &old_addr,
+                                            real_addr,
+                                        );
+                                        let storage_key =
+                                            KeyStore::get_or_create_device_storage_key_for_path(
+                                                Some(&st.session_store_path),
+                                            )
+                                            .expect("Failed to obtain device storage key; refusing fallback to insecure default");
+                                        let _ = save_contacts_encrypted(
+                                            &st.contacts,
+                                            &st.contacts_store_path,
+                                            &storage_key,
+                                        );
+                                        let _ = save_messages_encrypted(
+                                            &st.messages,
+                                            &st.messages_store_path,
+                                            &storage_key,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             let msg = ChatMessage {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -1398,12 +1511,23 @@ pub async fn handle_http_connection<S>(
                                     let peer_addr = bundle.identity_key.address();
                                     st.sessions.insert(peer_addr.clone(), sess.clone());
                                     st.sessions.insert(target.clone(), sess);
+                                    let mut old_addr_opt = None;
                                     if let Some(c) = st
                                         .contacts
                                         .iter_mut()
                                         .find(|c| c.alias == req.alias || c.target == target)
                                     {
-                                        c.address = peer_addr;
+                                        if c.address != peer_addr {
+                                            old_addr_opt = Some(c.address.clone());
+                                            c.address = peer_addr.clone();
+                                        }
+                                    }
+                                    if let Some(old_addr) = old_addr_opt {
+                                        migrate_contact_messages(
+                                            &mut st.messages,
+                                            &old_addr,
+                                            &peer_addr,
+                                        );
                                     }
                                     let storage_key =
                                         KeyStore::get_or_create_device_storage_key_for_path(Some(
@@ -2106,6 +2230,26 @@ fn urlencoding_decode(s: &str) -> String {
         }
     }
     result
+}
+
+fn migrate_contact_messages(
+    messages: &mut HashMap<String, Vec<ChatMessage>>,
+    old_addr: &str,
+    new_addr: &str,
+) {
+    if old_addr.is_empty() || new_addr.is_empty() || old_addr == new_addr {
+        return;
+    }
+    if let Some(old_msgs) = messages.remove(old_addr) {
+        let dest = messages.entry(new_addr.to_string()).or_default();
+        let mut combined = old_msgs;
+        for m in dest.drain(..) {
+            if !combined.iter().any(|existing| existing.id == m.id) {
+                combined.push(m);
+            }
+        }
+        *dest = combined;
+    }
 }
 
 fn get_unified_messages_for_peer(st: &AppState, peer: &str) -> Vec<ChatMessage> {
@@ -3534,5 +3678,97 @@ mod tests {
             "Valid Origin must return 200 OK, got: {}",
             resp_valid
         );
+    }
+
+    #[tokio::test]
+    async fn test_new_contact_two_messages_persist_across_restart() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let peer_port = listener.local_addr().unwrap().port();
+        let (peer_state, _peer_tmp) = create_test_app_state().await;
+
+        let p_state = peer_state.clone();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                let st = p_state.clone();
+                tokio::spawn(async move {
+                    handle_http_connection(socket, st, "127.0.0.1".to_string()).await;
+                });
+            }
+        });
+
+        let (state, temp_dir) = create_test_app_state().await;
+        let my_port = 8080;
+        let csrf_token = state.lock().unwrap().csrf_token.clone();
+
+        // 1. Add contact without address (only alias and target)
+        let add_body = format!(r#"{{"alias":"Zed","target":"127.0.0.1:{}"}}"#, peer_port);
+        let add_req = format!(
+            "POST /api/contacts HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            my_port, csrf_token, add_body.len(), add_body
+        );
+        let add_resp = send_test_http_request(my_port, state.clone(), &add_req).await;
+        assert!(add_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // 2. Send first message
+        let send1_body = r#"{"alias":"Zed","text":"first ever"}"#;
+        let send1_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            my_port, csrf_token, send1_body.len(), send1_body
+        );
+        let send1_resp = send_test_http_request(my_port, state.clone(), &send1_req).await;
+        assert!(send1_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // Check messages for Zed has "first ever"
+        let msg_req1 = format!(
+            "GET /api/messages?peer=Zed HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            my_port, csrf_token
+        );
+        let msg_resp1 = send_test_http_request(my_port, state.clone(), &msg_req1).await;
+        assert!(msg_resp1.contains("first ever"));
+
+        // 3. Send second message
+        let send2_body = r#"{"alias":"Zed","text":"second"}"#;
+        let send2_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            my_port, csrf_token, send2_body.len(), send2_body
+        );
+        let send2_resp = send_test_http_request(my_port, state.clone(), &send2_req).await;
+        assert!(send2_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // Check messages for Zed has BOTH messages in order
+        let msg_req2 = format!(
+            "GET /api/messages?peer=Zed HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            my_port, csrf_token
+        );
+        let msg_resp2 = send_test_http_request(my_port, state.clone(), &msg_req2).await;
+        assert!(msg_resp2.contains("first ever"));
+        assert!(msg_resp2.contains("second"));
+        let pos1 = msg_resp2.find("first ever").unwrap();
+        let pos2 = msg_resp2.find("second").unwrap();
+        assert!(pos1 < pos2, "Messages must be in chronological order");
+
+        // 4. Simulate app restart by reloading contacts and messages from disk
+        let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
+            &temp_dir.path().join("sessions.bin"),
+        ))
+        .unwrap();
+        let loaded_contacts =
+            load_contacts_encrypted(&temp_dir.path().join("contacts.bin"), &storage_key).unwrap();
+        let loaded_messages =
+            load_messages_encrypted(&temp_dir.path().join("messages.bin"), &storage_key).unwrap();
+
+        let (restarted_state, _r_tmp) = create_test_app_state().await;
+        {
+            let mut r_st = restarted_state.lock().unwrap();
+            r_st.contacts = loaded_contacts;
+            r_st.messages = loaded_messages;
+        }
+
+        let r_msgs = get_unified_messages_for_peer(&restarted_state.lock().unwrap(), "Zed");
+        assert_eq!(r_msgs.len(), 2, "Both messages must persist across restart");
+        assert_eq!(r_msgs[0].text, "first ever");
+        assert_eq!(r_msgs[1].text, "second");
     }
 }
