@@ -1,63 +1,74 @@
 # xChat
 
-**A serverless, peer-to-peer encrypted messenger written in Rust, designed to keep working over Bluetooth LE, local Wi-Fi and LAN when the internet is down.**
+**A serverless, peer-to-peer encrypted messenger written in Rust, built to keep working over local Wi-Fi, LAN and Bluetooth LE when the internet is down.**
 
-There are no accounts, phone numbers or servers. Each device is identified by a key-derived address such as `xchat_b770179928483d97`, and messages are end-to-end encrypted with X3DH key agreement and the Double Ratchet (ChaCha20-Poly1305, HKDF-SHA-256, Ed25519/X25519).
+There are no accounts, phone numbers or servers. Each device is identified by a key-derived address such as `xchat_b770179928483d97`. Every message is end-to-end encrypted with X3DH key agreement and the Double Ratchet, using ChaCha20-Poly1305, HKDF-SHA-256, Ed25519 and X25519.
 
-> **Status: research prototype (v0.1.0).** The cryptographic core and the command-line tools work and are well tested. The browser/Android app is still being hardened. Read [Project status](#project-status) before you trust it with anything real.
+> **Status: v0.1.0, research prototype.** The protocol, the CLI and the browser app all work end to end and are covered by 105 automated tests. The code has **not** been independently audited, and Bluetooth, Android and real multi-device field use are not yet verified. See [Project status](#project-status).
 
 ---
 
 ## Contents
 
+- [Features](#features)
 - [Project status](#project-status)
 - [Quick start](#quick-start)
+- [Using the app](#using-the-app)
 - [Command-line usage](#command-line-usage)
-- [The app (GUI)](#the-app-gui)
+- [Security model](#security-model)
 - [Architecture](#architecture)
-- [Cryptography](#cryptography)
 - [Repository layout](#repository-layout)
+- [Configuration, files and ports](#configuration-files-and-ports)
 - [Development](#development)
-- [Files, ports and data](#files-ports-and-data)
 - [Contributing](#contributing)
 - [License](#license)
 
 ---
 
+## Features
+
+- **End-to-end encryption with forward secrecy.** X3DH establishes each session and the Double Ratchet derives a fresh key for every message. One-time prekeys are consumed after use.
+- **No servers.** Peers find each other on the local network with a UDP beacon and talk directly over TCP/HTTP.
+- **Browser app.** `xchat app` serves a full chat UI with contacts, People Nearby, safety codes, QR invites, Rooms and SOS. The same UI ships as the Android WebView asset.
+- **Offline delivery through blind relays.** A relay stores opaque envelopes for a recipient who is offline. Only the recipient can collect them, by proving ownership of the mailbox, and the relay never sees plaintext.
+- **Burner rooms.** Password-protected group rooms that live only in RAM. They're never written to disk and disappear when you leave or restart.
+- **Emergency SOS.** A signed distress beacon with coordinates, broadcast to every reachable peer. It reports how many peers actually received it.
+- **Alternative carriers.** Working encoders and demos for a Chaumian mixnet, SMS framing and an AFSK audio modem.
+- **Honest delivery status.** Messages show as delivered only when a peer accepted them. Otherwise you see "failed" and the reason.
+
+---
+
 ## Project status
 
-This section reflects the code on `main` as tested on Linux with Rust 1.97 (two app instances, a headless browser and every API route exercised by hand).
+Tested on `main` (`e2d020f`) on Linux with Rust 1.97. I ran three app instances, a capture proxy between them, a headless browser driving the UI, the CLI daemon and relay, and hand-crafted attack requests against every API route.
 
-### Works today
+### Verified working
 
-| Area | Notes |
+| Area | What was checked |
 | --- | --- |
-| Crypto library (`xchat-crypto`) | X3DH, Double Ratchet with skipped-key handling, ChaCha20-Poly1305 with bound associated data, HKDF, bucketed padding and zeroize. |
-| Core protocol (`xchat-core`) | Wire envelopes, relay-blind routing header, replay filter, store-and-forward outbox and a session coordinator. |
-| Test suite | 76 tests pass: unit, integration, fuzz/tamper, concurrency, chaos, mutation and stress tests. |
-| `simulate-mesh`, `test-two-nodes` | End-to-end demos that encrypt, relay, decrypt and reply. Replay and tampering are rejected as expected. |
-| `daemon` + `send` | Real encrypted send over TCP. The receiving daemon decrypts and prints the message. |
-| `keygen`, `profile`, `contact`, `discover` | Identity and profile management, plus UDP peer discovery on port 9444. |
-| `mixnet`, `sms`, `audio-modem` | Working encode/decode demonstrations of each carrier. |
-| GUI basics | Loads cleanly, discovers nearby instances, sends to a contact added by `host:port`, and edits the profile. |
+| Build and CI gates | `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test --workspace` (105 tests) are all green. |
+| App messaging | Two-way chat between instances. A capture of the network traffic contains no plaintext. Sessions and history survive a restart. |
+| Attack resistance | Unsigned, spoofed, replayed and relabelled messages are rejected or attributed to the true sender. Cross-site requests and DNS-rebinding requests are refused. |
+| Nearby discovery | Several instances, even on the same machine, discover each other. Tapping a nearby person opens a working chat without duplicates or renames. |
+| Delivery status | An unreachable peer shows "failed". Ping measures real round-trip latency. A node with no peers reports 0 recipients for room sends and SOS. |
+| Burner rooms | Join, two-way messaging with no echo, and RAM-only storage (gone after a restart). |
+| SOS | Received by every peer with the correct coordinates. Forged beacons are rejected. |
+| CLI | `send` → `daemon` with ack/nack and reuse of sessions; a reused one-time prekey is rejected. `send` → relay → `fetch` works for offline delivery, and a different identity can't fetch someone else's mailbox. `simulate-mesh` and `test-two-nodes` pass. |
+| Storage | Every file in `~/.xchat_*` is created with mode `0600`. Optional passphrase protection uses Argon2id. |
 
 ### Known limitations
 
-These are tracked as open work. Until they are fixed, **the GUI does not provide the security properties described below.**
+- **Not audited.** Don't rely on xChat where your safety depends on it.
+- **The storage key sits on the same disk.** By default the at-rest key is a random file (`~/.xchat_device_key`) next to the data it protects. Set `XCHAT_PASSPHRASE` for real protection at rest. OS keychain support isn't implemented yet.
+- **Relay mailboxes can be identified.** Mailbox tokens are derived from the recipient's public key and the current hour. Anyone who holds that public key, such as a contact, can recognise which mailbox at a relay belongs to that person.
+- **Failed broadcasts still return HTTP 200.** Room sends and SOS with no recipients put `"status":"failed"` in the response body but keep HTTP status 200.
 
-- The GUI messaging path uses a static Diffie-Hellman key rather than the Double Ratchet. It also includes a plaintext copy of every message in the envelope it sends.
-- `/api/receive` accepts unsigned messages and replayed envelopes.
-- The GUI server sends `Access-Control-Allow-Origin: *` and has no authentication, so any web page can call its API.
-- The keystore is encrypted with a key compiled into the binary, and its file is created world-readable.
-- One-time prekeys are not consumed after use.
-- The GUI and `daemon` bind to `127.0.0.1`, so two different machines cannot reach each other yet.
-- Tapping a "People nearby" peer saves an unusable target, and replies to inbound senders fail. In both cases the UI still shows the message as delivered.
-- `ping`, `sos` and the GUI's ping, SOS and Rooms actions are placeholders that report success without sending anything.
-- The relay daemon stores envelopes but never delivers them onward.
-- GUI contacts and chat history are lost when the app restarts.
-- `cargo fmt --check` and `cargo clippy -D warnings` currently fail. A few small fixes are needed.
+### Not yet verified
 
-**Not yet verified:** physical BLE on real radios (`btleplug` on desktop, `BluetoothMeshManager.java` on Android), the Android APK build, and the macOS and Windows launchers.
+- Physical Bluetooth LE: `btleplug` on desktop and `BluetoothMeshManager.java` on Android.
+- The Android APK build (`scripts/build-apk.sh`) and the WebView bridge.
+- Two physically separate machines on a real Wi-Fi network. Testing used multiple instances on one host over its LAN interface.
+- The macOS and Windows one-click launchers.
 
 ---
 
@@ -65,28 +76,24 @@ These are tracked as open work. Until they are fixed, **the GUI does not provide
 
 ### Prerequisites
 
-- Stable Rust via [rustup](https://rustup.rs/). The project uses edition 2021 and was tested with 1.97.
+- Stable Rust via [rustup](https://rustup.rs/). Tested with Rust 1.97.
 - **Linux only:** D-Bus headers for the Bluetooth library:
   ```bash
   sudo apt-get install -y libdbus-1-dev pkg-config
   ```
 
-### Build and test
+### Build, test and run
 
 ```bash
 git clone https://github.com/EdgeRunner-runit/xChat.git
 cd xChat
-cargo build --workspace
-cargo test --workspace        # 87 automated tests (100% passing)
+cargo test --workspace          # 105 tests
+cargo run -- app                # opens the app at http://localhost:8080
 ```
 
-The binary is built as `target/debug/xchat` (and `xchat-cli`). Every command below can also be run through Cargo:
+The binary is called `xchat` (`target/debug/xchat`, or `target/release/xchat` with `--release`). Every `xchat …` command below can also be run as `cargo run -- …`.
 
-```bash
-cargo run -- <command>
-```
-
-### See it work in 30 seconds
+### See the protocol work without any setup
 
 ```bash
 cargo run -- simulate-mesh     # offline send → blind relay → BLE-to-TCP handover → decrypt → reply → attack checks
@@ -95,97 +102,123 @@ cargo run -- test-two-nodes    # two nodes over real TCP sockets with X3DH + Dou
 
 ---
 
-## Command-line usage
-
-```text
-xchat-cli <COMMAND>
-
-  app | gui        Launch the browser GUI (default port 8080)
-  keygen           Create an identity and print its prekey bundle
-  profile          Show or set @username, display name and invite link
-  contact          add | list | remove saved contacts
-  daemon           Run a peer listener, or a blind relay with --relay
-  send             Encrypt and send one message to a peer over TCP
-  discover         Listen for nearby peers on UDP 9444
-  simulate-mesh    Full multi-transport simulation
-  test-two-nodes   Two-node live socket test
-  mixnet           Chaumian mix pool and cover-traffic demo
-  sms              Split an encrypted envelope into SMS frames and reassemble it
-  audio-modem      Encode an envelope as AFSK tones and decode it
-  sos              Build an emergency beacon envelope (placeholder, see status)
-  burner           Create a RAM-only room token (placeholder, see status)
-  ping             Placeholder (see status)
-```
-
-### Create an identity
+## Using the app
 
 ```bash
-cargo run -- keygen
+xchat app                       # all interfaces, port 8080
+xchat app --port 8081           # different port
+xchat app --bind 127.0.0.1      # this machine only (no LAN peers)
 ```
 
-This writes `~/.xchat_keystore.bin` and prints your address, fingerprint and a JSON prekey bundle to give to peers.
+Open the address it prints in your browser. Your **address** (for example `192.168.1.20:8080`) appears at the top left; share it, or your QR invite, with the other person.
 
-### Set a username and get an invite link
+| Screen | What it does |
+| --- | --- |
+| **Chats** | Your conversations, plus **Saved Messages** (private notes that never leave the device) and the **AI helper** test chat. |
+| **People nearby** | Other xChat apps on the same network. Tap one to start chatting. |
+| **New chat (+)** | Add someone by `ip:port`, invite link or QR code. |
+| **Safety code** (shield icon in a chat) | Compare the emoji fingerprint in person to rule out a man-in-the-middle. |
+| **Rooms** | Join a burner room by name and password. Everyone with the same name and password is in the room. Messages live only in RAM. |
+| **Ways to send** | Status of each carrier: Wi-Fi/LAN, mixnet, Bluetooth, SMS and sound. |
+| **SOS** (red button) | Hold to send an emergency beacon with your location to everyone nearby. |
+| **My profile** | Username, display name, avatar colour and QR invite. |
+
+**Two instances on one computer.** Give each one its own `HOME` so they don't share key files:
 
 ```bash
-cargo run -- profile --username @alice --display-name "Alice" --invite
+HOME=/tmp/alice xchat app --port 8081
+HOME=/tmp/bob   xchat app --port 8082
 ```
 
-### Send an encrypted message between two nodes
+They'll find each other under **People nearby**.
 
-Run each side with its own `HOME` so the two identities stay separate:
-
-```bash
-# Terminal 1: receiver
-HOME=/tmp/bob cargo run -- keygen > /tmp/bob/keygen.txt   # copy the JSON bundle into /tmp/bob/bundle.json
-HOME=/tmp/bob cargo run -- daemon --port 7001
-
-# Terminal 2: sender
-HOME=/tmp/alice cargo run -- send --target 127.0.0.1:7001 \
-  --bundle /tmp/bob/bundle.json --message "hello bob"
-```
-
-The daemon prints `📩 New Session! Message from xchat_…: "hello bob"`. Run `mkdir -p /tmp/bob /tmp/alice` first.
-
-### Run a blind relay
-
-```bash
-cargo run -- daemon --port 7000 --relay
-```
-
-The relay logs each envelope's ID, destination token and hop count, but never sees any plaintext.
+**Frontend development.** The UI is a single file, `android/app/src/main/assets/index.html`, compiled into the binary. `scripts/live-app-server.py` serves it from disk and proxies `/api/*` to a running node, so you can edit the HTML without rebuilding.
 
 ---
 
-## The app (GUI)
+## Command-line usage
 
-```bash
-cargo run -- app             # or: cargo run -- app --port 8081
+```text
+xchat <COMMAND>
+
+  app | gui        Launch the browser app
+  keygen           Create an identity and print its prekey bundle
+  profile          Show or set @username, display name, invite link
+  contact          add | list | remove saved contacts
+  send             Encrypt and send a message to a peer over TCP
+  daemon           Run a peer listener, or a blind relay with --relay
+  fetch            Collect and decrypt your messages from a blind relay
+  discover         Listen for nearby peers
+  ping             Measure reachability and latency to a contact
+  sos              Broadcast a signed emergency beacon
+  burner           Join a RAM-only room and chat from the terminal
+  simulate-mesh    Full multi-transport simulation
+  test-two-nodes   Two-node live socket test
+  mixnet | sms | audio-modem   Carrier demos
 ```
 
-This opens `http://localhost:8080`. The frontend is a single file, `android/app/src/main/assets/index.html`. It is embedded into the Rust binary at compile time and also shipped as the Android WebView asset.
-
-What you'll find:
-
-- **Chats:** contact list, search, messages, and a safety-code (emoji fingerprint) check.
-- **People nearby:** peers found over UDP discovery.
-- **Ways to send:** status of each carrier (Wi-Fi, mixnet, Bluetooth, SMS, sound).
-- **Rooms:** burner-room UI.
-- **My profile:** username, avatar color, QR code share and scan.
-- **SOS:** hold-to-confirm emergency alert.
-
-To try two instances on one machine:
+### Identity and profile
 
 ```bash
-HOME=/tmp/a cargo run -- app --port 8081
-HOME=/tmp/b cargo run -- app --port 8082
+xchat keygen                                              # creates ~/.xchat_keystore.bin, prints your bundle
+xchat profile --username @alice --display-name "Alice" --invite
 ```
 
-In the first instance, open **New chat**, enter `127.0.0.1:8082`, and send a message.
+### Direct encrypted message
 
-Running two copies at once can corrupt them, because they share `$HOME/.xchat_*` files. Always give each instance its own `HOME`.
+```bash
+# Bob (receiver): start a listener. It prints Bob's prekey bundle; save it as bob.json and give it to Alice.
+xchat daemon --port 7000
 
-For frontend work, `scripts/live-app-server.py` serves `index.html` straight from disk and proxies `/api/*` to a running node, so you don't have to rebuild after every HTML change.
+# Alice (sender)
+xchat send --target 192.168.1.15:7000 --bundle bob.json --message "hello bob"
+```
+
+The daemon prints the decrypted message. `send` exits with `[✓]` when the daemon acknowledges the message and `[✗] … (nack)` (exit code 1) when it rejects it.
+
+### Offline delivery through a relay
+
+```bash
+# Relay operator
+xchat daemon --port 7000 --relay
+
+# Alice sends to the relay while Bob is offline
+xchat send --target relay.host:7000 --bundle bob.json --message "see you at 6"
+
+# Bob, later
+xchat fetch --relay relay.host:7000
+```
+
+The relay stores only opaque envelopes, keyed by a mailbox token that rotates every hour. A fetch has to prove it owns the mailbox, and fetched envelopes are removed from the relay.
+
+### Rooms, SOS and ping
+
+```bash
+xchat burner --room ops --pass whisper-delta-99
+xchat sos --lat 12.9716 --lon 77.5946 --message "Need help at gate 3"
+xchat ping Alice
+```
+
+---
+
+## Security model
+
+| Property | How it's provided |
+| --- | --- |
+| Confidentiality | X3DH + Double Ratchet. ChaCha20-Poly1305 with the routing header bound as associated data. Bucketed padding hides message length. |
+| Forward and post-compromise secrecy | A new message key per message, DH ratchet steps, one-time prekeys consumed after use, `zeroize` on secrets. |
+| Sender authenticity | The sender is identified only by the identity key proven in the handshake. Unauthenticated fields such as alias and socket are never used to pick a conversation or a reply address. |
+| Replay protection | A persistent replay filter keyed on message IDs. |
+| Local API protection | A per-launch token is required on every UI route. Cross-origin requests and unexpected `Host` headers are refused. Peer routes (`/api/identity`, `/api/bundle`, `/api/prekey`, `/api/receive`) are protected cryptographically instead. |
+| At-rest storage | Keystore, sessions, contacts, messages and the replay filter are encrypted and saved with mode `0600`. With `XCHAT_PASSPHRASE`, the key is derived with Argon2id. |
+| Relay privacy | Relays see only opaque envelopes and hourly mailbox tokens. Collecting a mailbox requires a cryptographic ownership proof. |
+
+**Primitives:** Ed25519 (`ed25519-dalek`), X25519 (`x25519-dalek`), HKDF-SHA-256, ChaCha20-Poly1305 and Argon2id.
+**References:** [Signal X3DH](https://signal.org/docs/specifications/x3dh/), [Double Ratchet](https://signal.org/docs/specifications/doubleratchet/), [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439), [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748), [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032), [RFC 5869](https://www.rfc-editor.org/rfc/rfc5869), [RFC 9106](https://www.rfc-editor.org/rfc/rfc9106).
+
+Full details are in [`docs/SECURITY_ARCHITECTURE.md`](docs/SECURITY_ARCHITECTURE.md).
+
+**Reporting vulnerabilities:** please use the repository's **Security** tab (private advisory), not a public issue.
 
 ---
 
@@ -193,50 +226,45 @@ For frontend work, `scripts/live-app-server.py` serves `index.html` straight fro
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ UI: CLI (xchat-cli) · browser GUI · Android WebView      │
+│ UI: CLI (xchat) · browser app · Android WebView          │
 ├──────────────────────────────────────────────────────────┤
 │ Session: X3DH + Double Ratchet (xchat-core::session)     │
 ├──────────────────────────────────────────────────────────┤
-│ Identity & keystore · contacts · profile                 │
+│ Identity & keystore · contacts · profile · replay filter │
 ├──────────────────────────────────────────────────────────┤
-│ Envelope · replay filter · outbox · relay · mix pool     │
+│ Envelope · outbox · blind relay · mix pool · SOS · rooms │
 ├──────────────────────────────────────────────────────────┤
 │ Transport trait + manager (failover)                     │
 ├───────────┬───────────┬──────────────┬───────────┬───────┤
-│ TCP / LAN │ BLE       │ BLE mesh sim │ SMS frame │ AFSK  │
+│ TCP / LAN │ BLE       │ UDP discovery│ SMS frame │ AFSK  │
 │           │ (btleplug)│              │           │ audio │
 └───────────┴───────────┴──────────────┴───────────┴───────┘
 ```
 
-The guiding rule is that **cryptography sits above transport.** A transport only ever moves an opaque `EncryptedEnvelope`. Relays read only the routing header (an ephemeral destination token, TTL, message ID and hop count). Because ratchet state is independent of any socket, a conversation can move from BLE to TCP without being reset.
+**Cryptography sits above transport.** A transport only ever moves an opaque `EncryptedEnvelope`. Relays read only the routing header: destination token, TTL, message ID and hop count. Ratchet state doesn't depend on any socket, so a conversation can move between carriers without being reset.
 
-**Life of a message (CLI path):**
+**Life of a message in the app:**
 
-1. The sender fetches or holds the recipient's prekey bundle and runs X3DH.
-2. The plaintext is padded to a size bucket, then encrypted with a Double Ratchet message key using ChaCha20-Poly1305, with the routing header as associated data.
-3. The envelope is queued in the outbox and sent over whichever transport is available, either directly or through a blind relay.
-4. The recipient checks the replay filter, decrypts, advances the ratchet and zeroizes the used key.
+1. On first contact, the sender fetches the peer's prekey bundle from `/api/bundle` and runs X3DH. Later messages reuse the ratchet session.
+2. The plaintext is padded and encrypted with that message's ratchet key, then POSTed to the peer's `/api/receive` as a signed envelope.
+3. The receiver checks the replay filter, decrypts, identifies the sender by the key proven in the handshake, and files the message under that address.
+4. Delivery status goes back to the UI: delivered, or failed with a reason.
 
-The design is specified in full in [`docs/SECURITY_ARCHITECTURE.md`](docs/SECURITY_ARCHITECTURE.md) and [`docs/ARCHITECTURE_MASTER.md`](docs/ARCHITECTURE_MASTER.md).
+More detail: [`docs/ARCHITECTURE_MASTER.md`](docs/ARCHITECTURE_MASTER.md) · user guide: [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md).
 
----
+### HTTP API (served by `xchat app`)
 
-## Cryptography
+| Route | Auth | Purpose |
+| --- | --- | --- |
+| `GET /api/identity`, `GET /api/bundle`, `GET /api/prekey` | none (peer) | Public identity and prekey bundle |
+| `POST /api/receive` | cryptographic | Inbound envelopes from peers |
+| `GET/POST /api/contacts`, `GET /api/messages?peer=` | UI token | Contacts and conversation history |
+| `POST /api/send`, `POST /api/ping`, `POST /api/sos` | UI token | Send, latency check, emergency beacon |
+| `POST /api/burner/join`, `POST /api/burner/leave` | UI token | Burner rooms |
+| `GET /api/discovered` | UI token | Nearby peers (excludes this node) |
+| `GET/POST /api/profile`, `POST /api/keygen` | UI token | Profile and identity reset |
 
-| Purpose | Primitive |
-| --- | --- |
-| Identity signing | Ed25519 (`ed25519-dalek`) |
-| Key agreement | X25519 (`x25519-dalek`): identity key, signed prekey, one-time prekeys, ephemeral ratchet keys |
-| Initial handshake | X3DH |
-| Per-message keys | Double Ratchet with bounded skipped-key cache |
-| KDF | HKDF-SHA-256 with domain-separation labels |
-| AEAD | ChaCha20-Poly1305 with associated data bound to the routing header |
-| Length hiding | Bucketed padding |
-| Memory hygiene | `zeroize` on secret types |
-
-References: [Signal X3DH](https://signal.org/docs/specifications/x3dh/), [Signal Double Ratchet](https://signal.org/docs/specifications/doubleratchet/), [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439), [RFC 7748](https://www.rfc-editor.org/rfc/rfc7748), [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032), [RFC 5869](https://www.rfc-editor.org/rfc/rfc5869).
-
-This code has **not** been independently audited.
+The UI token is injected into the served page as `<meta name="xchat-csrf-token">` and sent back in the `X-XChat-Token` header.
 
 ---
 
@@ -249,17 +277,55 @@ crates/
                      contacts, profile, sos, burner, duress, chunking, cover_traffic
                      tests/  integration · fuzz_and_tamper · concurrency_race ·
                              chaos_fault · mutation_quality · stress_load
-  xchat-transport/   traits, manager, tcp, ble (chunking), ble_central (btleplug),
+  xchat-transport/   traits, manager, tcp (incl. relay fetch), ble, ble_central,
                      mesh_sim, discovery (UDP), sms, audio_modem, mixnet_transport
-  xchat-cli/         main.rs (all commands) · gui.rs (embedded HTTP server + API)
+  xchat-cli/         main.rs (all commands) · gui.rs (HTTP server, API, live tests)
 android/             Android app: WebView + AndroidBridge + BluetoothMeshManager (minSdk 21)
 docs/                Security architecture, architecture master doc, user manual
 dbms/                Relational storage design (normalization, ER diagram, schema, query tuning)
-sandbox/             Isolated security-assessment harness (Makefile + run script)
-scripts/             build-apk.sh, package-release.sh, live-app-server.py, multi-node test scripts
+sandbox/             Isolated security-assessment harness
+scripts/             build-apk.sh, package-release.sh, live-app-server.py, multi-node scripts
 install.sh, xchat-launcher.*, xchat-setup.command, xchat-universal.bat   One-click launchers
-task_plan.md, progress.md, findings.md, MASTER_EVALUATION_DOCUMENT.md      Project notes
 ```
+
+---
+
+## Configuration, files and ports
+
+### Environment variables
+
+| Variable | Effect |
+| --- | --- |
+| `XCHAT_PASSPHRASE` | Derive the at-rest storage key from a passphrase with Argon2id (recommended). |
+| `XCHAT_SALT_PATH` | Where to store the Argon2id salt (default `~/.xchat_keystore.salt`). |
+| `XCHAT_STORAGE_KEY` | Supply the 32-byte storage key directly, as hex. |
+| `XCHAT_DEVICE_KEY_PATH` | Location of the random device key used when no passphrase is set. |
+| `HOME` | All data lives in `$HOME/.xchat_*`. Change it to run several identities side by side. |
+
+### Data files (all mode `0600`)
+
+| File | Contents |
+| --- | --- |
+| `~/.xchat_keystore.bin` | Identity, signed prekey and one-time prekeys |
+| `~/.xchat_sessions.bin` | Double Ratchet sessions |
+| `~/.xchat_contacts.bin` | Contacts (burner rooms excluded) |
+| `~/.xchat_messages.bin` | Conversation history (burner rooms excluded) |
+| `~/.xchat_replay.bin` | Replay filter |
+| `~/.xchat_profile.json` | Username, display name, avatar |
+| `~/.xchat_device_key` / `~/.xchat_keystore.salt` | Storage key, or Argon2id salt |
+
+To start completely fresh, delete `~/.xchat_*`.
+
+### Ports
+
+| Port | Use |
+| --- | --- |
+| TCP `8080` | App and peer API (`xchat app --port`) |
+| TCP `7000` | Daemon or relay (`xchat daemon --port`) |
+| UDP `9444` | Nearby discovery beacon (port reuse enabled, so several instances can share it) |
+| BLE service `a495ff10-c5b1-4b44-b512-1370f02d74de` | Bluetooth mesh |
+
+Open TCP 8080 (or your chosen port) and UDP 9444 in your firewall so other devices on the network can reach you.
 
 ---
 
@@ -268,64 +334,35 @@ task_plan.md, progress.md, findings.md, MASTER_EVALUATION_DOCUMENT.md      Proje
 ```bash
 cargo fmt --check
 cargo clippy --workspace --tests -- -D warnings
-cargo test --workspace        # 87 automated tests across all suites (100% passing)
-
-# Individual suites (as run in CI)
-cargo test --test fuzz_and_tamper_tests -- --nocapture
-cargo test --test concurrency_race_tests -- --nocapture
-cargo test --test chaos_fault_tests -- --nocapture
-cargo test --test mutation_quality_tests -- --nocapture
-cargo test --test stress_load_tests --release -- --nocapture
+cargo test --workspace
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above on Ubuntu and also builds the Android APK.
-
-### Android APK
+The app's API tests in `crates/xchat-cli/src/gui.rs` start real servers on ephemeral ports and make real HTTP requests. CI (`.github/workflows/ci.yml`) runs fmt, clippy, the full test suite, and each stress, chaos, fuzz and concurrency suite separately on Ubuntu, then builds the Android APK.
 
 ```bash
+# Android APK (needs the Android SDK)
 export ANDROID_HOME=/path/to/Android/sdk
-./scripts/build-apk.sh        # outputs dist/xchat.apk and dist/xchat.apk.sha256
+./scripts/build-apk.sh               # → dist/xchat.apk + .sha256
+
+# macOS release tarballs (arm64, x86_64, universal)
+./scripts/package-release.sh         # → dist/
 ```
 
-### macOS release packages
-
-```bash
-./scripts/package-release.sh  # builds arm64 + x86_64 and lipo'd universal tarballs into dist/
-```
-
-Cargo produces both `target/release/xchat` and `xchat-cli`, matching the launcher and install scripts.
-
----
-
-## Files, ports and data
-
-| Item | Default |
-| --- | --- |
-| Keystore | `~/.xchat_keystore.bin` |
-| Profile | `~/.xchat_profile.json` |
-| CLI contacts | `~/.xchat_contacts.bin` |
-| GUI | TCP `8080` (`--port`) |
-| Daemon / relay | TCP `7000` (`--port`) |
-| Peer discovery | UDP `9444` (`SO_REUSEPORT` enabled on Unix for multiple local instances) |
-| BLE service UUID | `a495ff10-c5b1-4b44-b512-1370f02d74de` |
-
-> **Note on UDP Port Sharing**: Peer discovery binds UDP port 9444 with `SO_REUSEADDR` and `SO_REUSEPORT` on Unix/macOS/Linux. This allows multiple instances on the same host to share port 9444 for local discovery broadcast reception. If running on platforms without port reuse support, only the first instance binds 9444 while subsequent instances fall back to ephemeral ports.
-
-To start fresh, delete the three `~/.xchat_*` files.
+The one-click launchers (`install.sh`, `xchat-launcher.sh`, and others) look for a local build first. Otherwise they download releases from `EdgeRunner-runit/xChat_AP_2026`.
 
 ---
 
 ## Contributing
 
 1. Fork the repo and create a branch.
-2. Make your change and add tests.
-3. Make sure `cargo fmt --check`, `cargo clippy --workspace --tests -- -D warnings` and `cargo test --workspace` all pass.
+2. Make your change and add tests. API changes need a live-HTTP test in `gui.rs`.
+3. Make sure fmt, clippy and the full test suite all pass.
 4. Open a pull request that explains what changed and why.
 
-The [known limitations](#known-limitations) are a good place to start. Please report security issues privately through the repository's **Security** tab, not as public issues.
+Good places to start: OS keychain storage, verifying BLE on real hardware, a two-machine field test, and unlinkable relay mailbox tokens (see [Known limitations](#known-limitations)).
 
 ---
 
 ## License
 
-The workspace manifest declares **MIT OR Apache-2.0**, but no `LICENSE` file is checked in yet. Add `LICENSE-MIT` and `LICENSE-APACHE` to make this explicit. Third-party icon notices (Lucide, Tabler) are in [`LICENSES/THIRD_PARTY.md`](LICENSES/THIRD_PARTY.md).
+The workspace manifest declares **MIT OR Apache-2.0**, but no `LICENSE` file is checked in yet. Add `LICENSE-MIT` and `LICENSE-APACHE` to make it explicit. Third-party icon notices (Lucide, Tabler) are in [`LICENSES/THIRD_PARTY.md`](LICENSES/THIRD_PARTY.md). Third-party icon notices (Lucide, Tabler) are in [`LICENSES/THIRD_PARTY.md`](LICENSES/THIRD_PARTY.md).
