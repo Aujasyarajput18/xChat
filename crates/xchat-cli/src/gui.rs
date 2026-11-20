@@ -2845,6 +2845,85 @@ mod tests {
         assert_eq!(received.content, "Burn after reading");
     }
 
+    #[tokio::test]
+    async fn test_burner_room_http_join_and_inbound_delivery() {
+        let (state, _temp) = create_test_app_state().await;
+        let listener_opt = TcpListener::bind("127.0.0.1:0").await.ok();
+        let port = listener_opt
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(8080);
+        if let Some(listener) = listener_opt {
+            let state_srv = state.clone();
+            tokio::spawn(run_server_loop(
+                listener,
+                state_srv,
+                "127.0.0.1".to_string(),
+            ));
+        }
+
+        let csrf_token = {
+            let st = state.lock().unwrap();
+            st.csrf_token.clone()
+        };
+
+        // 1. Join burner room via HTTP
+        let join_body = serde_json::json!({
+            "room": "ops_sec",
+            "pass": "secret_pass_123"
+        })
+        .to_string();
+        let join_req = format!(
+            "POST /api/burner/join HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, join_body.len(), join_body
+        );
+        let join_resp = send_test_http_request(port, state.clone(), &join_req).await;
+        assert!(
+            join_resp.starts_with("HTTP/1.1 200 OK"),
+            "Join failed: {}",
+            join_resp
+        );
+
+        // 2. Sender posts to room and dispatches envelope to /api/receive
+        let mut sender_room =
+            xchat_core::burner::BurnerRoom::new("ops_sec", "secret_pass_123", 600);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let env = sender_room
+            .post_message("NodeA", "Burn after reading!", now)
+            .unwrap();
+
+        let wire = WireMessageEnvelope {
+            envelope: env,
+            sender_alias: Some("#ops_sec:NodeA".to_string()),
+            sender_socket: None,
+            sender_address: None,
+        };
+        let wire_body = serde_json::to_string(&wire).unwrap();
+        let receive_req = format!(
+            "POST /api/receive HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, wire_body.len(), wire_body
+        );
+        let recv_resp = send_test_http_request(port, state.clone(), &receive_req).await;
+        assert!(
+            recv_resp.starts_with("HTTP/1.1 200 OK"),
+            "Recv failed: {}",
+            recv_resp
+        );
+
+        // 3. Query messages for #ops_sec
+        let get_msgs_req = format!(
+            "GET /api/messages?peer=%23ops_sec HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let msgs_resp = send_test_http_request(port, state.clone(), &get_msgs_req).await;
+        assert!(msgs_resp.starts_with("HTTP/1.1 200 OK"));
+        assert!(msgs_resp.contains("Burn after reading!"));
+    }
+
     #[test]
     fn test_p1_7_contacts_and_messages_persist_across_restart() {
         let temp_dir = tempfile::tempdir().unwrap();

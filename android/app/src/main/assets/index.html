@@ -4752,6 +4752,7 @@ async function enterBurnerRoom() {
         showToast(STRINGS.toastEnterRoomName, true);
         return;
     }
+    const alias = '#' + room;
     try {
         if (!isNative) {
             await fetch(API_BASE + '/api/burner/join', {
@@ -4759,12 +4760,28 @@ async function enterBurnerRoom() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ room: room, pass: pass || 'default_pass' })
             });
-            await loadContacts();
-            const alias = '#' + room;
-            const c = contacts.find(x => x.alias === alias);
-            if (c) selectContact(c);
+            await pollServerMessages();
         }
     } catch(e) {}
+
+    // Switch to the Chats tab
+    switchTab('chats');
+
+    // Select the #room contact so messages are sent directly to the burner room
+    let c = contacts.find(x => x.alias === alias);
+    if (!c) {
+        c = {
+            alias: alias,
+            target: 'burner',
+            status: 'Burner Room (RAM-only)',
+            last_message: 'Joined room. Messages auto-destruct.',
+            last_time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        contacts.unshift(c);
+        renderContacts();
+    }
+    selectContact(c);
+
     showToast(STRINGS.toastRoomJoined(room));
     closeModal('burnerModal');
 }
