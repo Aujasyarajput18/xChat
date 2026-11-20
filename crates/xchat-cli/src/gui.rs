@@ -148,7 +148,14 @@ pub fn save_contacts_encrypted(
     path: &std::path::Path,
     encryption_key: &[u8; 32],
 ) -> Result<(), xchat_core::errors::CoreError> {
-    let bytes = serde_json::to_vec(contacts)
+    let filtered_contacts: Vec<ContactEntry> = contacts
+        .iter()
+        .filter(|c| {
+            !c.alias.starts_with('#') && c.target != "burner" && !c.address.starts_with("burner_")
+        })
+        .cloned()
+        .collect();
+    let bytes = serde_json::to_vec(&filtered_contacts)
         .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
@@ -187,8 +194,11 @@ pub fn load_contacts_encrypted(
         b"xchat-contacts-vault-v1",
     )
     .map_err(xchat_core::errors::CoreError::Crypto)?;
-    let contacts: Vec<ContactEntry> = serde_json::from_slice(&decrypted)
+    let mut contacts: Vec<ContactEntry> = serde_json::from_slice(&decrypted)
         .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    contacts.retain(|c| {
+        !c.alias.starts_with('#') && c.target != "burner" && !c.address.starts_with("burner_")
+    });
     Ok(contacts)
 }
 
@@ -197,7 +207,12 @@ pub fn save_messages_encrypted(
     path: &std::path::Path,
     encryption_key: &[u8; 32],
 ) -> Result<(), xchat_core::errors::CoreError> {
-    let bytes = serde_json::to_vec(messages)
+    let filtered_messages: HashMap<String, Vec<ChatMessage>> = messages
+        .iter()
+        .filter(|(k, _)| !k.starts_with('#') && !k.starts_with("burner_"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let bytes = serde_json::to_vec(&filtered_messages)
         .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
@@ -236,8 +251,9 @@ pub fn load_messages_encrypted(
         b"xchat-messages-vault-v1",
     )
     .map_err(xchat_core::errors::CoreError::Crypto)?;
-    let msgs: HashMap<String, Vec<ChatMessage>> = serde_json::from_slice(&decrypted)
+    let mut msgs: HashMap<String, Vec<ChatMessage>> = serde_json::from_slice(&decrypted)
         .map_err(|e| xchat_core::errors::CoreError::StorageError(e.to_string()))?;
+    msgs.retain(|k, _| !k.starts_with('#') && !k.starts_with("burner_"));
     Ok(msgs)
 }
 
@@ -1028,15 +1044,6 @@ pub async fn handle_http_connection<S>(
                         last_message: "Joined room. Messages auto-destruct.".to_string(),
                         last_time: get_now_time_string(),
                     });
-                    let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
-                        &st.session_store_path,
-                    ))
-                    .expect("Failed to obtain device storage key; refusing fallback to insecure default");
-                    let _ = save_contacts_encrypted(
-                        &st.contacts,
-                        &st.contacts_store_path,
-                        &storage_key,
-                    );
                 }
 
                 serde_json::to_string(&serde_json::json!({
@@ -1054,6 +1061,37 @@ pub async fn handle_http_connection<S>(
         let resp = json_response(
             "400 Bad Request",
             r#"{"error":"Invalid burner room request"}"#,
+            &cors_headers,
+        );
+        let _ = socket.write_all(resp.as_bytes()).await;
+    } else if path == "/api/burner/leave" && method == "POST" {
+        #[derive(Deserialize)]
+        struct LeaveBurnerReq {
+            room: String,
+        }
+        if let Ok(req) = serde_json::from_str::<LeaveBurnerReq>(&body) {
+            let room_alias = if req.room.starts_with('#') {
+                req.room.clone()
+            } else {
+                format!("#{}", req.room)
+            };
+            {
+                let mut st = state_clone.lock().unwrap();
+                st.burner_rooms.remove(&room_alias);
+                st.contacts.retain(|c| {
+                    c.alias != room_alias
+                        && !c.alias.eq_ignore_ascii_case(&room_alias)
+                        && !c.address.starts_with(&format!("burner_{}", room_alias))
+                });
+                st.messages.remove(&room_alias);
+            }
+            let resp = json_response("200 OK", r#"{"status":"left"}"#, &cors_headers);
+            let _ = socket.write_all(resp.as_bytes()).await;
+            return;
+        }
+        let resp = json_response(
+            "400 Bad Request",
+            r#"{"error":"Invalid leave burner room request"}"#,
             &cors_headers,
         );
         let _ = socket.write_all(resp.as_bytes()).await;
@@ -2048,9 +2086,33 @@ pub async fn handle_http_connection<S>(
         });
 
         let msgs_json = {
-            let st = state_clone.lock().unwrap();
-            if let Some(peer) = peer_opt {
-                let list = get_unified_messages_for_peer(&st, &peer);
+            let mut st = state_clone.lock().unwrap();
+            if let Some(ref peer) = peer_opt {
+                if peer.starts_with('#') {
+                    let now_ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let valid_contents_opt = if let Some(room) = st.burner_rooms.get_mut(peer) {
+                        room.prune_expired(now_ts);
+                        let set: std::collections::HashSet<String> = room
+                            .get_messages()
+                            .iter()
+                            .map(|m| m.content.clone())
+                            .collect();
+                        Some(set)
+                    } else {
+                        None
+                    };
+                    if let Some(valid_contents) = valid_contents_opt {
+                        if let Some(msgs) = st.messages.get_mut(peer) {
+                            msgs.retain(|m| {
+                                m.status == "failed" || valid_contents.contains(&m.text)
+                            });
+                        }
+                    }
+                }
+                let list = get_unified_messages_for_peer(&st, peer);
                 serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
             } else {
                 "[]".to_string()
@@ -3945,5 +4007,109 @@ mod tests {
             "On 3-node network, SOS must report exactly 2, got: {}",
             sos_3node_resp
         );
+    }
+
+    #[tokio::test]
+    async fn test_burner_room_ram_only_never_persists_across_restart() {
+        let (state, temp_dir) = create_test_app_state().await;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener.local_addr().unwrap().port();
+        let csrf_token = state.lock().unwrap().csrf_token.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state.clone(),
+            "127.0.0.1".to_string(),
+        ));
+
+        // 1. Join burner room #testroom via HTTP
+        let join_body = r#"{"room":"testroom","pass":"secret123"}"#;
+        let join_req = format!(
+            "POST /api/burner/join HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, join_body.len(), join_body
+        );
+        let join_resp = send_test_http_request(port, state.clone(), &join_req).await;
+        assert!(join_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // 2. Send message into #testroom
+        let send_body = r##"{"alias":"#testroom","target":"burner","text":"hello room from A"}"##;
+        let send_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, send_body.len(), send_body
+        );
+        let send_resp = send_test_http_request(port, state.clone(), &send_req).await;
+        assert!(send_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // In RAM, #testroom is present in contacts and messages
+        {
+            let st = state.lock().unwrap();
+            assert!(st.contacts.iter().any(|c| c.alias == "#testroom"));
+            assert!(st.messages.contains_key("#testroom"));
+        }
+
+        // 3. Trigger disk save of current state
+        let storage_key = KeyStore::get_or_create_device_storage_key_for_path(Some(
+            &temp_dir.path().join("sessions.bin"),
+        ))
+        .unwrap();
+        {
+            let st = state.lock().unwrap();
+            save_contacts_encrypted(
+                &st.contacts,
+                &temp_dir.path().join("contacts.bin"),
+                &storage_key,
+            )
+            .unwrap();
+            save_messages_encrypted(
+                &st.messages,
+                &temp_dir.path().join("messages.bin"),
+                &storage_key,
+            )
+            .unwrap();
+        }
+
+        // 4. Reload from disk to simulate application restart
+        let loaded_contacts =
+            load_contacts_encrypted(&temp_dir.path().join("contacts.bin"), &storage_key).unwrap();
+        let loaded_messages =
+            load_messages_encrypted(&temp_dir.path().join("messages.bin"), &storage_key).unwrap();
+
+        assert!(
+            !loaded_contacts.iter().any(|c| c.alias == "#testroom"),
+            "Burner room #testroom must NOT be in persisted contacts"
+        );
+        assert!(
+            !loaded_messages.contains_key("#testroom"),
+            "Burner room #testroom messages must NOT be in persisted messages"
+        );
+
+        let (restarted_state, _r_tmp) = create_test_app_state().await;
+        {
+            let mut r_st = restarted_state.lock().unwrap();
+            r_st.contacts = loaded_contacts;
+            r_st.messages = loaded_messages;
+        }
+
+        let r_msgs = get_unified_messages_for_peer(&restarted_state.lock().unwrap(), "#testroom");
+        assert!(
+            r_msgs.is_empty(),
+            "Burner room messages must be completely gone on restart"
+        );
+
+        // 5. Test leaving a room via /api/burner/leave immediately clears memory
+        let leave_body = r#"{"room":"testroom"}"#;
+        let leave_req = format!(
+            "POST /api/burner/leave HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, leave_body.len(), leave_body
+        );
+        let leave_resp = send_test_http_request(port, state.clone(), &leave_req).await;
+        assert!(leave_resp.starts_with("HTTP/1.1 200 OK"));
+        {
+            let st = state.lock().unwrap();
+            assert!(!st.contacts.iter().any(|c| c.alias == "#testroom"));
+            assert!(!st.messages.contains_key("#testroom"));
+            assert!(!st.burner_rooms.contains_key("#testroom"));
+        }
     }
 }

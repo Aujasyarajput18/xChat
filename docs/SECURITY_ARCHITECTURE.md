@@ -662,6 +662,9 @@ Relays must **not** know:
 - Long-term recipient identity
 - Conversation history or graphs
 
+### Mailbox Token Linkability
+Store-and-forward relay tokens are derived on an hourly epoch using `derive_discovery_token(recipient_pubkey, epoch_hour)`. Any party holding the recipient's public key (such as an established contact or someone who parsed their public invite) can compute the tokens for the current hour and observe which mailbox at the relay holds buffered envelopes for that recipient. Draining or fetching buffered envelopes requires authenticating with an Ed25519 signature tied to that public key, preventing unauthorized nodes from draining messages; unlinkability against contacts can be further strengthened in future revisions by deriving tokens from ratchet states or through anonymous credential tokens.
+
 ------------------------------------------------------------------------
 
 # 28. Onion Routing --- Optional Advanced Layer
