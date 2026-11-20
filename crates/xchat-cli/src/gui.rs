@@ -1649,11 +1649,13 @@ pub async fn handle_http_connection<S>(
         // Check if this envelope belongs to an ephemeral Burner Room
         let burner_match = {
             let mut st = state_clone.lock().unwrap();
+            let my_username = st.profile.username.clone();
+            let my_addr = st.keystore.identity.public_key().address();
             let mut found = None;
             for (room_alias, burner) in st.burner_rooms.iter_mut() {
                 if envelope.header.destination_token == burner.routing_token() {
                     if let Ok(bmsg) = burner.receive_envelope(&envelope, now_ts) {
-                        found = Some((room_alias.clone(), bmsg));
+                        found = Some((room_alias.clone(), bmsg, my_username, my_addr));
                         break;
                     }
                 }
@@ -1661,7 +1663,23 @@ pub async fn handle_http_connection<S>(
             found
         };
 
-        if let Some((room_alias, bmsg)) = burner_match {
+        if let Some((room_alias, bmsg, my_username, my_addr)) = burner_match {
+            // Drop room messages whose sender is the local identity
+            let clean_bmsg_sender = bmsg.sender_alias.trim_start_matches('@');
+            let clean_my_username = my_username.trim_start_matches('@');
+            let is_self = clean_bmsg_sender.eq_ignore_ascii_case(clean_my_username)
+                || sender_addr_hint.as_deref() == Some(&my_addr);
+
+            if is_self {
+                let resp = json_response(
+                    "200 OK",
+                    r#"{"status":"delivered","authenticated":true}"#,
+                    &cors_headers,
+                );
+                let _ = socket.write_all(resp.as_bytes()).await;
+                return;
+            }
+
             let now_str = get_now_time_string();
             let msg = ChatMessage {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -3108,6 +3126,108 @@ mod tests {
         let msgs_resp = send_test_http_request(port, state.clone(), &get_msgs_req).await;
         assert!(msgs_resp.starts_with("HTTP/1.1 200 OK"));
         assert!(msgs_resp.contains("Burn after reading!"));
+    }
+
+    #[tokio::test]
+    async fn test_burner_room_outbound_message_not_echoed_back_to_sender() {
+        let (state, _temp) = create_test_app_state().await;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("Failed to bind ephemeral listener");
+        let port = listener
+            .local_addr()
+            .expect("Failed to get local port")
+            .port();
+        let state_srv = state.clone();
+        tokio::spawn(run_server_loop(
+            listener,
+            state_srv,
+            "127.0.0.1".to_string(),
+        ));
+
+        let csrf_token = {
+            let st = state.lock().unwrap();
+            st.csrf_token.clone()
+        };
+
+        // 1. Join room #testroom via HTTP
+        let join_body = serde_json::json!({
+            "room": "testroom",
+            "pass": "pass123"
+        })
+        .to_string();
+        let join_req = format!(
+            "POST /api/burner/join HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, join_body.len(), join_body
+        );
+        let join_resp = send_test_http_request(port, state.clone(), &join_req).await;
+        assert!(join_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // 2. Node sends "hello room from A" to #testroom via POST /api/send
+        let send_body = serde_json::json!({
+            "alias": "#testroom",
+            "target": "burner",
+            "text": "hello room from A"
+        })
+        .to_string();
+        let send_req = format!(
+            "POST /api/send HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port, csrf_token, send_body.len(), send_body
+        );
+        let send_resp = send_test_http_request(port, state.clone(), &send_req).await;
+        assert!(send_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // 3. Construct the envelope that would be broadcast and arrive back at /api/receive
+        let (env, my_handle, my_addr) = {
+            let mut st = state.lock().unwrap();
+            let my_username = st.profile.username.clone();
+            let my_address = st.keystore.identity.public_key().address();
+            let room = st.burner_rooms.get_mut("#testroom").unwrap();
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let env = room
+                .post_message(&my_username, "hello room from A", now)
+                .unwrap();
+            (env, my_username, my_address)
+        };
+
+        let wire = WireMessageEnvelope {
+            envelope: env,
+            sender_alias: Some(format!("#testroom:{}", my_handle)),
+            sender_socket: Some("127.0.0.1:8080".to_string()),
+            sender_address: Some(my_addr),
+        };
+        let wire_body = serde_json::to_string(&wire).unwrap();
+        let receive_req = format!(
+            "POST /api/receive HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            port,
+            wire_body.len(),
+            wire_body
+        );
+        let recv_resp = send_test_http_request(port, state.clone(), &receive_req).await;
+        assert!(recv_resp.starts_with("HTTP/1.1 200 OK"));
+
+        // 4. Query messages for #testroom: must contain EXACTLY ONE message from "self", NOT echoed as "peer"
+        let get_msgs_req = format!(
+            "GET /api/messages?peer=%23testroom HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-XChat-Token: {}\r\nConnection: close\r\n\r\n",
+            port, csrf_token
+        );
+        let msgs_resp = send_test_http_request(port, state.clone(), &get_msgs_req).await;
+        assert!(msgs_resp.starts_with("HTTP/1.1 200 OK"));
+        let body = msgs_resp.split("\r\n\r\n").nth(1).unwrap_or("");
+        let msgs: Vec<ChatMessage> = serde_json::from_str(body).unwrap();
+        assert_eq!(
+            msgs.len(),
+            1,
+            "Room message must appear exactly once on sender!"
+        );
+        assert_eq!(
+            msgs[0].sender, "self",
+            "Message must be 'self', not echoed as 'peer'"
+        );
+        assert_eq!(msgs[0].text, "hello room from A");
     }
 
     #[test]

@@ -3929,6 +3929,17 @@ window.onIncomingNetworkMessage = function(rawJson) {
 
         if (!text) return;
 
+        // Drop room or peer messages whose sender is the local identity
+        const myUname = (myIdentity && myIdentity.username ? myIdentity.username : '').toLowerCase();
+        const myCleanUname = myUname.replace(/^@/, '');
+        const senderClean = senderUname.toLowerCase().replace(/^@/, '');
+        if (
+            (senderAddr && myIdentity && myIdentity.address && senderAddr === myIdentity.address) ||
+            (myCleanUname && senderClean === myCleanUname)
+        ) {
+            return;
+        }
+
         let contact = contacts.find(c => 
             c.alias.toLowerCase() === formattedAlias.toLowerCase() || 
             c.alias.toLowerCase() === senderUname.toLowerCase() ||
@@ -3968,6 +3979,12 @@ window.onIncomingNetworkMessage = function(rawJson) {
         if (!chatHistories[contact.alias]) {
             chatHistories[contact.alias] = [];
         }
+        // Deduplicate incoming message against existing history
+        const isDuplicate = chatHistories[contact.alias].some(m => 
+            m.text === text && (m.sender === 'self' || m.time === timeStr)
+        );
+        if (isDuplicate) return;
+
         chatHistories[contact.alias].push({ sender: 'peer', text: text, time: timeStr });
         if (formattedAlias !== contact.alias) {
             if (!chatHistories[formattedAlias]) {
