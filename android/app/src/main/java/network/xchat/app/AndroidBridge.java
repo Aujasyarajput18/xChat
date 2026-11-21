@@ -563,7 +563,8 @@ public class AndroidBridge {
             public void run() {
                 vibrate(30);
                 try {
-                    String js = "if (window.onIncomingNetworkMessage) { window.onIncomingNetworkMessage(" + JSONObject.quote(payload) + "); }";
+                    String bleOrigin = (senderMac != null && !senderMac.isEmpty()) ? ("ble:" + senderMac) : "ble:mesh";
+                    String js = "if (window.onIncomingNetworkMessage) { window.onIncomingNetworkMessage(" + JSONObject.quote(payload) + ", " + JSONObject.quote(bleOrigin) + "); }";
                     activity.getWebView().evaluateJavascript(js, null);
                 } catch (Exception ignored) {}
             }
@@ -583,6 +584,14 @@ public class AndroidBridge {
     @JavascriptInterface
     public boolean isBleScanning() {
         return bleManager != null && bleManager.isScanning();
+    }
+
+    public void ensureBleMeshRunning() {
+        if (bleManager != null) {
+            bleManager.ensureRunning();
+        } else {
+            bleManager = new BluetoothMeshManager(activity, this);
+        }
     }
 
     @JavascriptInterface

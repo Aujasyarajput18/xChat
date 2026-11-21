@@ -3835,6 +3835,7 @@ async function sendCurrentMessage() {
                             activeContact.target === 'Physical BLE Mesh' || 
                             activeContact.target === 'ble:mesh' ||
                             (activeContact.status && activeContact.status.toLowerCase().includes('ble')) ||
+                            (activeContact.status && activeContact.status.toLowerCase().includes('bluetooth')) ||
                             !activeContact.target.includes(':') ||
                             activeContact.target === '127.0.0.1:8080';
 
@@ -3882,7 +3883,13 @@ async function sendCurrentMessage() {
     }
 }
 
-window.onIncomingNetworkMessage = function(rawJson) {
+window.onSendCallback = function(callbackId, success) {
+    if (!success) {
+        showToast('BLE send queued / in progress...', false);
+    }
+};
+
+window.onIncomingNetworkMessage = function(rawJson, sourceBleTarget) {
     try {
         const data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
         if (!data) return;
@@ -3890,6 +3897,9 @@ window.onIncomingNetworkMessage = function(rawJson) {
         const senderUname = data.username || data.sender_alias || data.alias || data.sender || 'Peer';
         const formattedAlias = senderUname.startsWith('@') ? senderUname : ('@' + senderUname);
         const senderAddr = data.sender_address || data.address || data.sender || '';
+        const actualBleTarget = (sourceBleTarget && sourceBleTarget.startsWith('ble:'))
+            ? sourceBleTarget
+            : ((senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'ble:mesh');
 
         // Handle Handshake / Identity Exchange
         if (data.type === 'handshake' || data.type === 'identity') {
@@ -3901,7 +3911,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
             if (!contact) {
                 contact = {
                     alias: formattedAlias,
-                    target: (senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'ble:mesh',
+                    target: actualBleTarget,
                     address: senderAddr,
                     status: 'Physical BLE Mesh',
                     last_message: 'Connected via Physical BLE Mesh',
@@ -3912,6 +3922,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
                 const prevAlias = contact.alias;
                 contact.alias = formattedAlias;
                 if (senderAddr) contact.address = senderAddr;
+                contact.target = actualBleTarget;
                 contact.status = 'Physical BLE Mesh';
                 if (prevAlias !== formattedAlias && chatHistories[prevAlias]) {
                     chatHistories[formattedAlias] = (chatHistories[formattedAlias] || []).concat(chatHistories[prevAlias]);
@@ -3960,7 +3971,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
         if (!contact) {
             contact = {
                 alias: formattedAlias,
-                target: (senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'ble:mesh',
+                target: actualBleTarget,
                 address: senderAddr,
                 status: 'Physical BLE Mesh',
                 last_message: text,
@@ -3971,7 +3982,7 @@ window.onIncomingNetworkMessage = function(rawJson) {
             const prevAlias = contact.alias;
             contact.alias = formattedAlias;
             if (senderAddr) contact.address = senderAddr;
-            contact.target = (senderAddr && senderAddr.startsWith('ble:')) ? senderAddr : 'ble:mesh';
+            contact.target = actualBleTarget;
             contact.status = 'Physical BLE Mesh';
             contact.last_message = text;
             contact.last_time = timeStr;

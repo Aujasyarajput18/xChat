@@ -395,6 +395,11 @@ impl BleCentralTransport {
                         tokio::spawn(async move {
                             let mut reassembler = BleReassembler::new();
                             while let Some(notif) = stream.next().await {
+                                debug!(
+                                    "BLE raw notification packet received from {}: {} bytes",
+                                    peer_id_clone,
+                                    notif.value.len()
+                                );
                                 match reassembler.process_packet(&notif.value) {
                                     Ok(Some(assembled_bytes)) => {
                                         info!(

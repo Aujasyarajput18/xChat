@@ -209,7 +209,7 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == PERMISSION_REQ_CODE) {
             if (bridge != null) {
-                bridge.restartBleMesh();
+                bridge.ensureBleMeshRunning();
             }
         }
     }
@@ -218,7 +218,7 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         if (bridge != null) {
-            bridge.restartBleMesh();
+            bridge.ensureBleMeshRunning();
         }
     }
 

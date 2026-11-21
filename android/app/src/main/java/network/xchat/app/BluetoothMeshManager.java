@@ -83,6 +83,7 @@ public class BluetoothMeshManager {
     private final BleReassembler reassembler = new BleReassembler();
     private final Map<String, DiscoveredBleNode> discoveredNodes = new ConcurrentHashMap<>();
     private final Map<String, BluetoothDevice> connectedCentrals = new ConcurrentHashMap<>();
+    private volatile BluetoothDevice lastConnectedCentral = null;
 
     private AdvertiseCallback advertiseCallback;
     private ScanCallback scanCallback;
@@ -176,7 +177,17 @@ public class BluetoothMeshManager {
     }
 
     public boolean hasConnectedCentrals() {
-        return !connectedCentrals.isEmpty();
+        return !connectedCentrals.isEmpty() || lastConnectedCentral != null;
+    }
+
+    public void ensureRunning() {
+        if (isDestroyed) return;
+        if (!isAdvertising) {
+            startAdvertising();
+        }
+        if (!isScanning) {
+            startScanning();
+        }
     }
 
     public List<DiscoveredBleNode> getDiscoveredNodes() {
@@ -204,6 +215,7 @@ public class BluetoothMeshManager {
                     super.onConnectionStateChange(device, status, newState);
                     Log.d(TAG, "GattServer onConnectionStateChange: device=" + device.getAddress() + " state=" + newState);
                     if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        lastConnectedCentral = device;
                         connectedCentrals.put(device.getAddress(), device);
                         DiscoveredBleNode node = new DiscoveredBleNode();
                         node.macAddress = device.getAddress();
@@ -256,6 +268,7 @@ public class BluetoothMeshManager {
                     }
 
                     if (device != null && device.getAddress() != null) {
+                        lastConnectedCentral = device;
                         connectedCentrals.put(device.getAddress(), device);
                         if (!discoveredNodes.containsKey(device.getAddress())) {
                             DiscoveredBleNode node = new DiscoveredBleNode();
@@ -328,6 +341,7 @@ public class BluetoothMeshManager {
                         } catch (Exception ignored) {}
                     }
                     if (device != null && device.getAddress() != null) {
+                        lastConnectedCentral = device;
                         connectedCentrals.put(device.getAddress(), device);
                         Log.i(TAG, "Central " + device.getAddress() + " CCCD updated (notifications enabled).");
                     }
@@ -613,15 +627,40 @@ public class BluetoothMeshManager {
                 connectedCentral = connectedCentrals.get("@" + cleanMac.toLowerCase());
             }
         }
+        if (connectedCentral == null && lastConnectedCentral != null) {
+            connectedCentral = lastConnectedCentral;
+        }
         if (connectedCentral == null && !connectedCentrals.isEmpty()) {
-            // If there's an active central connected, use it!
             connectedCentral = connectedCentrals.values().iterator().next();
         }
+        if (connectedCentral == null && bluetoothManager != null) {
+            try {
+                List<BluetoothDevice> connected = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT_SERVER);
+                if (connected == null || connected.isEmpty()) {
+                    connected = bluetoothManager.getConnectedDevices(BluetoothProfile.GATT);
+                }
+                if (connected != null && !connected.isEmpty()) {
+                    connectedCentral = connected.get(0);
+                    connectedCentrals.put(connectedCentral.getAddress(), connectedCentral);
+                    lastConnectedCentral = connectedCentral;
+                }
+            } catch (Exception ignored) {}
+        }
 
-        if ((connectedCentral != null || !connectedCentrals.isEmpty()) && gattServer != null && txChar != null) {
-            final List<BluetoothDevice> targets = (connectedCentral != null && !cleanMac.isEmpty() && !cleanMac.equalsIgnoreCase("mesh") && !cleanMac.contains("."))
-                ? Collections.singletonList(connectedCentral)
-                : new ArrayList<>(new HashSet<>(connectedCentrals.values()));
+        final List<BluetoothDevice> targets = new ArrayList<>();
+        if (connectedCentral != null) {
+            targets.add(connectedCentral);
+        }
+        for (BluetoothDevice d : connectedCentrals.values()) {
+            if (d != null && !targets.contains(d)) {
+                targets.add(d);
+            }
+        }
+        if (targets.isEmpty() && lastConnectedCentral != null) {
+            targets.add(lastConnectedCentral);
+        }
+
+        if (!targets.isEmpty() && gattServer != null && txChar != null) {
             new Thread(new Runnable() {
                 @Override
                 public void run() {
@@ -632,9 +671,10 @@ public class BluetoothMeshManager {
                         List<byte[]> chunks = chunkPayload(payloadBytes, 20, msgId);
                         boolean overallOk = true;
                         for (BluetoothDevice targetDevice : targets) {
-                            for (byte[] chunk : chunks) {
+                            for (int i = 0; i < chunks.size(); i++) {
+                                byte[] chunk = chunks.get(i);
                                 boolean sent = false;
-                                for (int retry = 0; retry < 4; retry++) {
+                                for (int retry = 0; retry < 12; retry++) {
                                     try {
                                         txChar.setValue(chunk);
                                         if (Build.VERSION.SDK_INT >= 33) {
@@ -658,14 +698,13 @@ public class BluetoothMeshManager {
                                     } catch (Throwable t) {
                                         Log.w(TAG, "Notification attempt " + retry + " failed: " + t.getMessage());
                                     }
-                                    try { Thread.sleep(20); } catch (Exception ignored) {}
+                                    try { Thread.sleep(25); } catch (Exception ignored) {}
                                 }
                                 if (!sent) {
-                                    Log.w(TAG, "notifyCharacteristicChanged failed after retries for " + targetDevice.getAddress());
+                                    Log.w(TAG, "notifyCharacteristicChanged failed after retries for chunk " + i + "/" + chunks.size() + " to " + targetDevice.getAddress());
                                     overallOk = false;
-                                    break;
                                 }
-                                try { Thread.sleep(15); } catch (Exception ignored) {}
+                                try { Thread.sleep(30); } catch (Exception ignored) {}
                             }
                         }
                         if (callback != null) callback.onResult(overallOk, overallOk ? null : "GATT notification failed");
