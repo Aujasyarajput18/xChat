@@ -249,13 +249,8 @@ async fn main() -> anyhow::Result<()> {
             no_browser,
             advertise,
         } => {
-            gui::start_embedded_app_server(
-                port,
-                Some(&bind),
-                no_browser,
-                advertise.as_deref(),
-            )
-            .await?;
+            gui::start_embedded_app_server(port, Some(&bind), no_browser, advertise.as_deref())
+                .await?;
         }
 
         Commands::Sos { message, lat, lon } => {

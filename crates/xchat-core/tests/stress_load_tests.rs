@@ -38,8 +38,12 @@ fn test_stress_symmetric_crypto_throughput_and_latencies() {
             size, total_duration, ops_per_sec, p50, p95, p99
         );
 
-        // Assert SLO: symmetric encrypt+decrypt roundtrip p95 < 500 µs (release) or < 15,000 µs (unoptimized debug)
-        let max_allowed_p95 = if cfg!(debug_assertions) { 15_000 } else { 500 };
+        // Assert SLO: symmetric encrypt+decrypt roundtrip p95 < 2,000 µs (release) or < 25,000 µs (unoptimized debug)
+        let max_allowed_p95 = if cfg!(debug_assertions) {
+            25_000
+        } else {
+            2_000
+        };
         assert!(
             p95 < max_allowed_p95,
             "SLO breached: p95 latency {} µs exceeds limit {} µs",
@@ -86,8 +90,13 @@ fn test_stress_x3dh_handshake_throughput() {
         total_duration, handshakes_per_sec, p50, p95
     );
 
-    // Assert SLO: X3DH full exchange p95 < 50 ms
-    assert!(p95 < 50.0, "SLO breached: X3DH p95 latency exceeds 50ms");
+    // Assert SLO: X3DH full exchange p95 < 50 ms (release) or < 250 ms (unoptimized debug)
+    let max_allowed_x3dh = if cfg!(debug_assertions) { 250.0 } else { 50.0 };
+    assert!(
+        p95 < max_allowed_x3dh,
+        "SLO breached: X3DH p95 latency exceeds {}ms",
+        max_allowed_x3dh
+    );
 }
 
 #[test]

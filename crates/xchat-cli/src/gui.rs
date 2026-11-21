@@ -2258,18 +2258,19 @@ pub async fn handle_http_connection<S>(
                 );
         let _ = socket.write_all(resp.as_bytes()).await;
     } else if path == "/xchat.apk" {
-        if let Ok(apk_bytes) = tokio::fs::read("/Users/kushalgarg/xChat_AP_2026/dist/xchat.apk").await {
+        let apk_path = std::env::var("XCHAT_APK_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("dist/xchat.apk"));
+        if let Ok(apk_bytes) = tokio::fs::read(&apk_path).await {
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.android.package-archive\r\nContent-Disposition: attachment; filename=\"xchat.apk\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 apk_bytes.len()
             );
             let _ = socket.write_all(resp.as_bytes()).await;
             let _ = socket.write_all(&apk_bytes).await;
-            return;
         } else {
             let resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nAPK not found";
             let _ = socket.write_all(resp.as_bytes()).await;
-            return;
         }
     } else {
         let csrf_token = {
