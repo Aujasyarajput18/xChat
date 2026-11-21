@@ -49,6 +49,12 @@ enum Commands {
         /// Host or network interface to bind listener on (e.g. 0.0.0.0 or 127.0.0.1)
         #[arg(short, long, default_value = "0.0.0.0")]
         bind: String,
+        /// Do not automatically open the browser on startup
+        #[arg(long, default_value_t = false)]
+        no_browser: bool,
+        /// Explicit IP address to advertise in discovery beacons
+        #[arg(long)]
+        advertise: Option<String>,
     },
 
     /// Alias for `app` (launches lightweight Graphical User Interface in browser)
@@ -59,6 +65,12 @@ enum Commands {
         /// Host or network interface to bind listener on (e.g. 0.0.0.0 or 127.0.0.1)
         #[arg(short, long, default_value = "0.0.0.0")]
         bind: String,
+        /// Do not automatically open the browser on startup
+        #[arg(long, default_value_t = false)]
+        no_browser: bool,
+        /// Explicit IP address to advertise in discovery beacons
+        #[arg(long)]
+        advertise: Option<String>,
     },
 
     /// Generate a fresh cryptographic identity and export public prekey bundle
@@ -225,8 +237,25 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::App { port, bind } | Commands::Gui { port, bind } => {
-            gui::start_embedded_app_server(port, Some(&bind)).await?;
+        Commands::App {
+            port,
+            bind,
+            no_browser,
+            advertise,
+        }
+        | Commands::Gui {
+            port,
+            bind,
+            no_browser,
+            advertise,
+        } => {
+            gui::start_embedded_app_server(
+                port,
+                Some(&bind),
+                no_browser,
+                advertise.as_deref(),
+            )
+            .await?;
         }
 
         Commands::Sos { message, lat, lon } => {

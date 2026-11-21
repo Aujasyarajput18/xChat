@@ -345,11 +345,20 @@ pub async fn dispatch_http_post(target: &str, path: &str, body: &str) -> anyhow:
 }
 
 /// Start the embedded Telegram-styled app server with UDP peer discovery.
-pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow::Result<()> {
+pub async fn start_embedded_app_server(
+    port: u16,
+    bind: Option<&str>,
+    no_browser: bool,
+    advertise: Option<&str>,
+) -> anyhow::Result<()> {
     let bind_interface = bind.unwrap_or("0.0.0.0");
     let bind_addr = format!("{}:{}", bind_interface, port);
     let listener = TcpListener::bind(&bind_addr).await?;
-    let local_ip = detect_local_ip();
+    let local_ip = if let Some(adv) = advertise {
+        adv.to_string()
+    } else {
+        detect_local_ip()
+    };
 
     let keystore_path = get_keystore_path();
     let keystore =
@@ -618,22 +627,24 @@ pub async fn start_embedded_app_server(port: u16, bind: Option<&str>) -> anyhow:
     println!("Visual Safety Code:{}", visual_fp);
     println!("Discovery Carrier: Local UDP Beacon (Zero-Config Nearby Radar Active)");
     println!("-------------------------------------------------------------------------------");
-    println!("Opening local browser window...");
+    if !no_browser {
+        println!("Opening local browser window...");
 
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open")
-        .arg(format!("http://localhost:{}", port))
-        .spawn();
+        #[cfg(target_os = "macos")]
+        let _ = std::process::Command::new("open")
+            .arg(format!("http://localhost:{}", port))
+            .spawn();
 
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open")
-        .arg(format!("http://localhost:{}", port))
-        .spawn();
+        #[cfg(target_os = "linux")]
+        let _ = std::process::Command::new("xdg-open")
+            .arg(format!("http://localhost:{}", port))
+            .spawn();
 
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", &format!("http://localhost:{}", port)])
-        .spawn();
+        #[cfg(target_os = "windows")]
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", &format!("http://localhost:{}", port)])
+            .spawn();
+    }
 
     println!("Ready to handle messages. Press Ctrl+C to close.");
 
@@ -2332,8 +2343,7 @@ fn active_remote_peers(st: &AppState) -> Vec<xchat_core::profile::DiscoveredPeer
                 && p.socket_addr != my_local_sock
                 && !p.socket_addr.is_empty()
                 && (st.local_port == 0
-                    || (!p.socket_addr.ends_with(&format!(":{}", st.local_port))
-                        && p.socket_addr != format!("127.0.0.1:{}", st.local_port)
+                    || (p.socket_addr != format!("127.0.0.1:{}", st.local_port)
                         && p.socket_addr != format!("localhost:{}", st.local_port)
                         && p.socket_addr != format!("0.0.0.0:{}", st.local_port)))
         })
@@ -3235,6 +3245,60 @@ mod tests {
             .collect();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0]["username"], "@remote_peer");
+    }
+
+    #[tokio::test]
+    async fn test_active_remote_peers_same_port_different_host_returned() {
+        let ble = xchat_transport::BleCentralTransport::new().await;
+        let discovery = PeerDiscoveryEngine::bind(0, 0).await.unwrap();
+        let keystore = KeyStore::generate();
+        let pk = keystore.identity.public_key();
+        let profile = UserProfile::new(
+            "@device_a",
+            "Device A",
+            &pk.address(),
+            &pk.fingerprint(),
+            1_000_000,
+        )
+        .unwrap();
+
+        let st = AppState {
+            contacts: vec![],
+            messages: HashMap::new(),
+            keystore,
+            profile,
+            local_ip: "192.168.50.10".to_string(),
+            local_port: 8080,
+            discovery,
+            ble_transport: ble,
+            sessions: HashMap::new(),
+            replay_filter: ReplayFilter::new(),
+            csrf_token: "test_token".to_string(),
+            session_store_path: PathBuf::from("/tmp/test_sessions_p1.bin"),
+            contacts_store_path: PathBuf::from("/tmp/test_contacts_p1.bin"),
+            messages_store_path: PathBuf::from("/tmp/test_messages_p1.bin"),
+            burner_rooms: HashMap::new(),
+        };
+
+        let remote_peer = xchat_core::profile::DiscoveredPeer {
+            username: "@device_b".to_string(),
+            display_name: "Device B".to_string(),
+            address: "xchat_device_b_addr".to_string(),
+            fingerprint: "1234-5678".to_string(),
+            socket_addr: "192.168.50.20:8080".to_string(),
+            discovered_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            transport_type: "lan".to_string(),
+        };
+
+        st.discovery.register_peer(remote_peer);
+
+        let active = active_remote_peers(&st);
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].address, "xchat_device_b_addr");
+        assert_eq!(active[0].socket_addr, "192.168.50.20:8080");
     }
 
     #[test]
