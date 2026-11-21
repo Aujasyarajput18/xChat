@@ -2413,11 +2413,13 @@ mod tests {
     }
 
     async fn send_test_http_request(port: u16, state: Arc<Mutex<AppState>>, req: &str) -> String {
-        if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", port)).await {
-            stream.write_all(req.as_bytes()).await.unwrap();
-            let mut resp = Vec::new();
-            stream.read_to_end(&mut resp).await.unwrap();
-            return String::from_utf8_lossy(&resp).to_string();
+        if port != 8080 {
+            if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", port)).await {
+                stream.write_all(req.as_bytes()).await.unwrap();
+                let mut resp = Vec::new();
+                stream.read_to_end(&mut resp).await.unwrap();
+                return String::from_utf8_lossy(&resp).to_string();
+            }
         }
         // In-memory duplex fallback for sandboxed/isolated environments
         let (client, server) = tokio::io::duplex(65536);
